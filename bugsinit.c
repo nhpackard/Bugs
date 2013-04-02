@@ -13,7 +13,7 @@ void usage()
 	fprintf(stderr,"-r  random number seed\n");
 	fprintf(stderr,"-t  number of time steps [10000]\n");
 	fprintf(stderr,"-n  number of transient time steps [0]\n");
-	fprintf(stderr,"-M  move tax (per step) [0.01]\n");
+	fprintf(stderr,"-X  move tax (per step) [0.01]\n");
 	fprintf(stderr,"-m  mutation rate [0.05]\n");
 	fprintf(stderr,"-f  food in a mouthful [0.1]\n");
 	fprintf(stderr,"-x  tax when no food [0.0]\n");
@@ -35,7 +35,7 @@ void bugsinit(int ac, char *av[])
     tax = 0.0;
 
 // end default... now change if option passed.........
-    while ((c = getopt(ac, (char **) av, "s:t:n:M:m:f:x:N:h")) != -1) {
+    while ((c = getopt(ac, (char **) av, "s:t:n:X:m:f:x:N:h")) != -1) {
 		switch(c) {
 		case 's':
 			_seed = atoi(optarg); // random number seed
@@ -46,7 +46,7 @@ void bugsinit(int ac, char *av[])
 		case 'n':				// transient time
 			transient = atoi(optarg);
 			break;
-        case 'M':
+        case 'X':
             movetax = atof(optarg);
             break;
         case 'm':

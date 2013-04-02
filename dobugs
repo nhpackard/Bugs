@@ -33,7 +33,7 @@ echo "Output directory is $out"
 mkdir $out
 echo $seed > "$out/seed"
 git rev-parse master > "$out/git rev-parse master" 
-echo "bugs -r $seed $@" > "$out/command line"
+echo "bugs -s $seed $@" > "$out/command line"
 
 # set up output data files
 actfile="$out/activity"
@@ -52,4 +52,4 @@ echo "waiting a sec..."
 sleep 1
 done
 echo "starting bugs..."
-bugs -s $seed
+bugs -s $seed $@

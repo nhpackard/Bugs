@@ -154,12 +154,16 @@ def main():
         dat = [(bin(x)+bin(y)+bin(z),w) for [x,y,z,w] in dat]
         for (xx,act) in dat:
             if xx not in colors:
-                colors[xx] = palette[actcnt%255];
-                actcnt += 1
+                if cnt==0:
+                    colors[xx] = (255,255,255)
+                else:
+                    colors[xx] = palette[actcnt%255];
+                    actcnt += 1
         trdat = [(colors[xx],yy) for xx,yy in dat]
         if len(trdat) > maxact:
             trdat = trdat[0:maxact]
-        trace(screen,trdat)            
+        trace(screen,trdat)
+        cnt += 1
 
 if __name__=='__main__':
     main()

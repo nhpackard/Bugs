@@ -27,7 +27,7 @@ void splitbug(Bug *b)
     int tst,cnt;
     Bug * bb;
 //    checkAlive();
-    bb = utGetDead();           // not yet alive...
+    bb = utGetDead();           // now not dead but not yet alive... limbo
     copybug(b,bb);
     b->food /= 2.0;
     bb->food /= 2.0;
@@ -186,6 +186,12 @@ void movebug(Bug *b,int dx,int dy)
         b->food -= tax;
     if(b->food >1)
         splitbug(b);                
+    if(b->food <0){
+        killbug(b);
+        nn = NODE(b->x,b->y);   // current node
+        nodes[nn].bug=0;
+        return;
+    }
 //    checkAlive();
 }
 

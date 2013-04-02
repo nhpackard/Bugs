@@ -48,4 +48,4 @@ cat < /tmp/activity > $actfile &
 echo "finished setting up activity pipe to $actfile..."
 sleep 1
 echo "starting bugs..."
-bugs -s $seed
+bugs -s $seed $@

@@ -20,7 +20,7 @@ else:
 maxact = 1000                            # max number of activity traces in graph...
 Width = 300
 Height = 200
-ymax = 10000
+ymax = 100000
 ncount = 0                          # number of calls to trace
 
 def trace(screen, colvalvec):            # eachcolval = [key,activityvalue]

@@ -22,9 +22,8 @@ do
     fi
 done
 echo "dobugs:  seed = $seed"
-cat > "$out/seed" < echo $seed
 
-# set up output data files
+# set up data output directory
 if [ ! -d "data" ]
 then
 mkdir data
@@ -32,7 +31,11 @@ fi
 out="data/dat.$$"
 echo "Output directory is $out"
 mkdir $out
-cp bugs.c $out
+echo $seed > "$out/seed"
+git rev-parse master > "$out/git rev-parse master" 
+echo "bugs -r $seed $@" > "$out/command line"
+
+# set up output data files
 actfile="$out/activity"
 popfile="$out/population"
 

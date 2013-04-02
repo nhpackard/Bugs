@@ -1,0 +1,51 @@
+
+if [ $1 == "-h" ]
+then
+bugs -h
+exit
+fi
+
+seed="$$"
+# if seed passed in args, replace seed=$$ with seed passed...
+getnext=0
+for aa in $@
+do
+    if [ $getnext == 1 ]
+    then
+        seed=$aa
+        break
+    fi
+    if [ $aa == '-s' ]
+    then
+        getnext=1
+    fi
+done
+echo "dobugs:  seed = $seed"
+cat > "$out/seed" < echo $seed
+
+# set up output data files
+if [ ! -d "data" ]
+then
+mkdir data
+fi
+out="data/dat.$$"
+echo "Output directory is $out"
+mkdir $out
+cp bugs.c $out
+actfile="$out/activity"
+popfile="$out/population"
+
+seed="$$"
+cat > "$out/seed" < echo $seed
+
+rm -f /tmp/population
+mkfifo -m 666 /tmp/population
+cat < /tmp/population > $popfile &
+echo "finished setting up population pipe to $popfile..."
+rm -f /tmp/activity
+mkfifo -m 666 /tmp/activity
+cat < /tmp/activity > $actfile &
+echo "finished setting up activity pipe to $actfile..."
+sleep 1
+echo "starting bugs..."
+bugs -s $seed

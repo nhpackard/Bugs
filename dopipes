@@ -1,0 +1,25 @@
+# just set up the pipes to wait for 
+# bugs to start
+# (e.g. for starting bugs with gdb...)
+
+if [ ! -d "data" ]
+then
+mkdir data
+fi
+out="data/dat.$$"
+echo "Output directory is $out"
+mkdir $out
+cp bugs.c $out
+actfile="$out/activity"
+popfile="$out/population"
+
+rm -f /tmp/population
+mkfifo -m 666 /tmp/population
+cat < /tmp/population > $popfile &
+echo "finished setting up population pipe to $popfile..."
+rm -f /tmp/activity
+mkfifo -m 666 /tmp/activity
+cat < /tmp/activity > $actfile &
+echo "finished setting up activity pipe to $actfile..."
+echo "ready to start bugs..."
+

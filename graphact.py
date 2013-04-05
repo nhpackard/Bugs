@@ -17,15 +17,17 @@ else:
     datfile = None
     
     
-maxact = 1000                            # max number of activity traces in graph...
+maxact = 4000                            # max number of activity traces in graph...
 Width = 300
 Height = 200
+ymax = 200
 ymax = 100000
 ncount = 0                          # number of calls to trace
 
 def trace(screen, colvalvec):            # eachcolval = [key,activityvalue]
                                          #        self.traceinit()
     cnt = 0
+    cnt1 = 0
     yvals = []
     cols = []
     global ymax
@@ -36,12 +38,13 @@ def trace(screen, colvalvec):            # eachcolval = [key,activityvalue]
         yvals.append(colval[1])
         cnt += 1
         if cnt>maxact:
+            print "too many activity points..."
             break
-        
     # do the scroll:
-    if ncount<Width:      # first, don't
+    if ncount<Width:      # first, don't scroll
         yvals = [Height - y * Height / ymax
                  for y in yvals]
+        cnt1 = 0
         for i in range(len(yvals)):
             x = ncount
             y = yvals[i]
@@ -154,16 +157,16 @@ def main():
         dat = [(bin(x)+bin(y)+bin(z),w) for [x,y,z,w] in dat]
         for (xx,act) in dat:
             if xx not in colors:
-                if cnt==0:
+                if cnt==0:              # 1st data chunk all white
                     colors[xx] = (255,255,255)
                 else:
-                    colors[xx] = palette[actcnt%255];
+                    colors[xx] = palette[actcnt%255]
                     actcnt += 1
         trdat = [(colors[xx],yy) for xx,yy in dat]
         if len(trdat) > maxact:
             trdat = trdat[0:maxact]
         trace(screen,trdat)
-        cnt += 1
+        cnt += 1                        # counting number of data chunks coming from bugs program
 
 if __name__=='__main__':
     main()

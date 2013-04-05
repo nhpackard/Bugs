@@ -36,21 +36,19 @@
 //#define NROWS 256
 #define XFAC (REAL)SIZEX/SIZEY
 #define NMAX NROWS*ROWL
-#define NNBRS 4			// neighbors of nodes!
+#define NNBRS 9			// neighbors of nodes!
 
 
 
  /*****
  neighborhood shape is
- Nbr[0] bottom
- Nbr[1] right
- Nbr[2] top
- Nbr[3] left
- and if NNBRS=9:
- Nbr[4] LR
- Nbr[5] UR
- Nbr[6] UL
- Nbr[7] LL
+
+8 1 5
+
+4 0 2
+
+6 3 5
+
   ********/
 
 
@@ -150,6 +148,8 @@ extern void utDelAlive(Bug * b);
 extern void utPutDead(Bug * b);
 extern void utDelDead(Bug * b);
 extern Bug * utGetDead();
+extern int utInAlive(Bug * b);
+extern int utInDead(Bug * b);
 extern void checkhash();
 
 // displays.c

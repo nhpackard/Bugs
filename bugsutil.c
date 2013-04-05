@@ -2,7 +2,7 @@
 
 
     
-// ------------------------ beginning of routinges that use the hash sets
+// ------------------------ beginning of routines that use the hash sets
 
 // initialize bugs alive and dead arrays
 // make N of them alive
@@ -38,11 +38,11 @@ void splitbug(Bug *b)
         cnt++;
         tst = jitterbug(bb);
         if(tst==-1){
-            utPutDead(bb);
+            utPutDead(bb);      // back to dead
             break;
         }
         if(tst==1){
-            utPutAlive(bb);
+            utPutAlive(bb);     // made it to alive
             break;
         }
     }

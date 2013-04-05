@@ -196,7 +196,7 @@ void outputact()
         sprintf(out,"%d %d %d %d ",
                 a->key.sense,a->key.movex,a->key.movey,a->count);
         write(pipe_act,out,strlen(out));
-        if(++cnt>1000)
+        if(++cnt>10000)
             break;
     }
     sprintf(out,"\n");

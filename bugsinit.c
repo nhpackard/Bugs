@@ -59,8 +59,10 @@ void bugsinit(int ac, char *av[])
             tax = atof(optarg);
             break;
         case 'N':
+            ninit = atoi(optarg);
             break;
         case 'h':
+        default:
 			usage();
 			exit(0);
 		}
@@ -73,6 +75,18 @@ void bugsinit(int ac, char *av[])
 }
 
 
+/*****
+Neighborhood:
+
+8 1 5
+
+4 0 2
+
+6 3 5
+
+*****/
+
+
 // fill in node structure neighborhoods...
 
 // circular boundary conditions...
@@ -80,104 +94,120 @@ void initnodescb(Node * nn)
 {
 	long i,idx;
 
-// just to initialize to an Ising ground state...
-	for(i=0;i<NMAX;i++){
-		nn[i].occ = -1;
+// center cell...
+    for(i=0; i<NMAX; i++){
+        nn[i].Nbrs[0] = i;
         nn[i].bug = NULL;
         nn[i].food = 0;
     }
-
-// bottom neighbor...
-// lower vlink
-// LR diag
-	for(i=0;i<ROWL;i++){
-		nn[i].Nbrs[0] = (NROWS-1)*ROWL + i;
-	}
-	for(i=ROWL;i<ROWL*NROWS;i++){
-		nn[i].Nbrs[0] = i - ROWL;
-	}
-	
-// right neighbor...
-	for(i=0;i<ROWL*NROWS;i++)
-	{
-		if((i+1)%ROWL == 0){	// far R column
-			nn[i].Nbrs[1] = i+1-ROWL;
-		}
-		else{
-			nn[i].Nbrs[1] = i+1;
-			if(i+1+ROWL>NMAX){	// off top
-				idx = i + 1 + ROWL-NMAX;
-			}
-		}
-	}
 
 // top neighbor...
 	for(i=0;i<ROWL*NROWS;i++)
 	{
 		if(i+ROWL >= NMAX){		// top row
-			nn[i].Nbrs[2] = (i%ROWL);
+			nn[i].Nbrs[1] = (i%ROWL);
 		}
 		else{
-			nn[i].Nbrs[2] = i+ROWL;
+			nn[i].Nbrs[1] = i+ROWL;
 		} 
 	}
+
+// right neighbor...
+	for(i=0; i<ROWL*NROWS; i++)
+	{
+		if((i+1)%ROWL == 0){	// far R column
+			nn[i].Nbrs[2] = i+1-ROWL;
+		}
+		else{
+            if(i == NMAX-1)     // UR corner
+                nn[i].Nbrs[2] = 0;
+            else
+                nn[i].Nbrs[2] = i+1;
+        }
+    }
+// bottom neighbor...
+	for(i=0;i<ROWL;i++){
+		nn[i].Nbrs[3] = (NROWS-1)*ROWL + i;
+	}
+	for(i=ROWL;i<ROWL*NROWS;i++){
+		nn[i].Nbrs[3] = i - ROWL;
+	}
+	
+
 
 // left neighbor...
 	for(i=0;i<ROWL*NROWS;i++)
 	{
 		if(i%ROWL == 0){
-			nn[i].Nbrs[3] = i+ROWL-1;
+			nn[i].Nbrs[4] = i+ROWL-1;
 		}
 		else{
-			nn[i].Nbrs[3] = i-1;
+			nn[i].Nbrs[4] = i-1;
 		}
 	}
+// UR neighbor...
+	for(i=0;i<ROWL*NROWS;i++){
+        if(i+ROWL >= NMAX ){
+            if(i == NMAX/1)       // UR corner
+                nn[i].Nbrs[5] = 0;
+            else
+                nn[i].Nbrs[5] = i+ROWL+1-NMAX;
+        }
+        else{
+            if((i+1)%ROWL == 0)	// far R column
+                nn[i].Nbrs[5] = i+1;
+            else
+                nn[i].Nbrs[5] = i+ROWL+1;
+        }
+	}
+// LR neighbor...
+	for(i=0;i<ROWL*NROWS;i++)
+	{
+		if(i < ROWL){
+            if(i==ROWL-1)       // LR corner
+                nn[i].Nbrs[6] = NMAX-ROWL;
+            else
+                nn[i].Nbrs[6] = i+NMAX-ROWL+1;
+        }
+		else{
+            if((i+1)%ROWL == 0)	// far R column
+                nn[i].Nbrs[6] = i-1;
+            else
+                nn[i].Nbrs[6] = i-ROWL+1;
+        }
+	}
+// LL neighbor...
+	for(i=0;i<ROWL*NROWS;i++)
+	{
+		if(i<ROWL){             // bottom row
+            if(i==0)            // LL corner
+                nn[i].Nbrs[7] = NMAX-1;
+            else
+                nn[i].Nbrs[7] = i+NMAX-ROWL-1;
+        }
+		else{
+            if(i%ROWL == 0)     // L column
+                nn[i].Nbrs[7] = i-1;
+            else
+                nn[i].Nbrs[7] = i-ROWL-1;
+        }
+	}
+// UL neighbor...
+	for(i=0;i<ROWL*NROWS;i++)
+	{
+		if(i+ROWL > NMAX){
+			if(i==NMAX-ROWL)    // UL corner
+                nn[i].Nbrs[8] = ROWL-1;
+			nn[i].Nbrs[8] = i+ROWL-NMAX-1;
+        }
+		else{
+            if(i%ROWL == 0)     // L column
+                nn[i].Nbrs[8] = i+1;
+            else
+                nn[i].Nbrs[8] = i+ROWL-1;
+        }
+	}
 }
-
-// circular boundary conditions left and right,
-// solid boundary top and bottom.
-void initnodescb1(Node * nn)
-{
-	long i;
-
-// -1 means node unoccupied...
-	for(i=0;i<NMAX;i++)
-		nn[i].occ = -1;
-
-// bottom neighbor...
-	for(i=0;i<ROWL;i++)
-		nn[i].Nbrs[0] = -1;
-	for(i=ROWL;i<ROWL*NROWS;i++)
-		nn[i].Nbrs[0] = i - ROWL;
-	
-// right neighbor...
-	for(i=0;i<ROWL*NROWS;i++)
-	{
-		if((i+1)%ROWL == 0)
-			nn[i].Nbrs[1] = i+1-ROWL;
-		else
-			nn[i].Nbrs[1] = i+1;
-	}
-
-// top neighbor...
-	for(i=0;i<ROWL*NROWS;i++)
-	{
-		if(i+ROWL >= NMAX)
-			nn[i].Nbrs[2] = -1;
-		else
-			nn[i].Nbrs[2] = i+ROWL;
-	}
-
-// left neighbor...
-	for(i=0;i<ROWL*NROWS;i++)
-	{
-		if(i%ROWL == 0)
-			nn[i].Nbrs[3] = i+ROWL-1;
-		else
-			nn[i].Nbrs[3] = i-1;
-	}
-}
-
 void setnodes(Node * nn,int val)
 {
 	int i;
@@ -240,24 +270,24 @@ void initfoodtree(Node *nn)
         if(i==0){
             for(j=0;j<ROWL;j++){
                 idx = i*ROWL+j;
-                nn[idx].food = 1.0;
+                nn[idx].food = 0.3;
             }
             continue;
         }
         for(j=0;j<nbranch;j++){
             idx = i*ROWL+ROWL/2+j*brspace;
-            nn[idx].food = 1.0;
+            nn[idx].food = 0.3;
             idx = i*ROWL+ROWL/2-j*brspace;
-            nn[idx].food = 1.0;
+            nn[idx].food = 0.3;
         }
         if(i%(2*brspace) == 0){
             for(j=ROWL/2-(nbranch*brspace);j<ROWL/2+(nbranch*brspace);j++){
                 idx = i*ROWL+j;
-                nn[idx].food = 1.0;
+                nn[idx].food = 0.3;
             }
             nbranch++;
         }
-        if(nbranch>12)
+        if(nbranch>10)
             break;
     }
 }

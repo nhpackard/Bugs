@@ -106,13 +106,14 @@ extern void bugcolor_init();
 extern void bugcolor(double , double);
 
 // inits.c
-extern void initfoodgrad(Node *);
+extern void initfoodsquare(Node *);
 extern void initfoodtree(Node *);
-extern void initbugsbase();
 
 // bugutil.c
 extern Bug* randombug(int alive);
+extern Bug* randombugbase(int alive);
 extern void initbugs(int N);
+extern void initbugsbase(int N);
 extern void copybug(Bug *b, Bug *bb);
 extern void killbug(Bug *b);
 extern void movebug(Bug *b,int dx,int dy);

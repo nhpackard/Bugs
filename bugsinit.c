@@ -15,27 +15,33 @@ void usage()
 	fprintf(stderr,"-n  number of transient time steps [0]\n");
 	fprintf(stderr,"-X  move tax (per step) [0.01]\n");
 	fprintf(stderr,"-m  mutation rate [0.05]\n");
-	fprintf(stderr,"-f  food in a mouthful [0.1]\n");
+	fprintf(stderr,"-f  food in a mouthful [0.8]\n");
 	fprintf(stderr,"-x  tax when no food [0.0]\n");
-    fprintf(stderr,"-N  number of initial bugs [1000]\n");
+    fprintf(stderr,"-N  number of initial bugs [100]\n");
+    fprintf(stderr,"-b  initial distribution [0]:\n\t 0=random placement, 1 random placement on base\n");
+    fprintf(stderr,"-F  food nitial distribution [0]:\n\t 0=square, 1 tree\n");
 }
 
 
 void bugsinit(int ac, char *av[])
 {
 	char c;
+    int basectl;
+    int foodctl;
     //     initial values:
 	_seed=time(0);					// every run random
 	nsteps = 10000;
     mutrate = 0.05;
-    mouthfull = 0.1;
+    mouthfull = 0.8;
     movetax = 0.01;
     transient = 0;
-    ninit = 1000;
+    ninit = 100;
     tax = 0.0;
+    basectl = 0;
+    foodctl = 0;
 
 // end default... now change if option passed.........
-    while ((c = getopt(ac, (char **) av, "s:t:n:X:m:f:x:N:h")) != -1) {
+    while ((c = getopt(ac, (char **) av, "s:t:n:X:m:f:x:N:b:F:h")) != -1) {
 		switch(c) {
 		case 's':
 			_seed = atoi(optarg); // random number seed
@@ -61,6 +67,12 @@ void bugsinit(int ac, char *av[])
         case 'N':
             ninit = atoi(optarg);
             break;
+        case 'b':
+            basectl = atoi(optarg);
+            break;
+        case 'F':
+            foodctl = atoi(optarg);
+            break;
         case 'h':
         default:
 			usage();
@@ -70,8 +82,22 @@ void bugsinit(int ac, char *av[])
     initpop();
     initact();
 	initnodescb(nodes);			// initializes neighbors
-    initfoodtree(nodes);
-    initbugs(ninit);
+    switch(basectl){
+    case 1:
+        initbugsbase(ninit);
+        break;
+    default:
+    case 0:
+        initbugs(ninit);
+    }
+    switch(foodctl){
+    default:
+    case 0:
+        initfoodsquare(nodes);
+        break;
+    case 1:
+        initfoodtree(nodes);
+    }
 }
 
 
@@ -260,13 +286,29 @@ void initfoodgrad(Node *nn)
     }
 }
  
+void initfoodsquare(Node *nn)
+{
+    int i,lside,rside,top;
+    lside = ROWL/4;
+    rside = 3*ROWL/4;
+    top=ROWL/2;
+    for(i=lside; i<rside; i++){
+        nn[i].food = 0.3;
+        nn[top*ROWL+i].food = 0.3;
+    }
+    for(i=0; i<top; i++){
+        nn[lside+ROWL*i].food = 0.3;
+        nn[rside+ROWL*i].food = 0.3;
+    }
+}
+
 void initfoodtree(Node *nn)
 {
     int i,j,nbranch,brspace, idx;
 
     brspace = 10;
     nbranch = 1;
-    for(i=0;i<NROWS;i++){
+    for(i=0;i<NROWS-20;i++){
         if(i==0){
             for(j=0;j<ROWL;j++){
                 idx = i*ROWL+j;

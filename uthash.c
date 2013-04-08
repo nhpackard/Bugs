@@ -154,6 +154,7 @@ typedef struct{
     UT_hash_handle hhact;
     Actkey key;
     int count;
+    int time;
 } Activity;
 
 Activity * activity = NULL;
@@ -183,7 +184,7 @@ void doact(int sense, int movex, int movey)
         aa->count = 1;
         HASH_ADD(hhact,activity,key,sizeof(Actkey),aa);
     }
-
+    aa->time = ncount;
 }
 
 void outputact()
@@ -193,11 +194,13 @@ void outputact()
     int cnt;
     cnt = 0;
     HASH_ITER(hhact,activity,a,atmp){
-        sprintf(out,"%d %d %d %d ",
-                a->key.sense,a->key.movex,a->key.movey,a->count);
-        write(pipe_act,out,strlen(out));
-        if(++cnt>10000)
-            break;
+        if(a->time == ncount-1){  // for version that only prints out contemporary activity...
+            sprintf(out,"%d %d %d %d ",
+                    a->key.sense,a->key.movex,a->key.movey,a->count);
+            write(pipe_act,out,strlen(out));
+            if(++cnt>10000)
+                break;
+        }
     }
     sprintf(out,"\n");
     write(pipe_act,out,strlen(out));

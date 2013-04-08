@@ -20,7 +20,21 @@ void initbugs(int N)
         utPutDead(b);
     }
 }
-    
+
+void initbugsbase(int N)
+{
+    int i;
+    Bug * b;
+    for(i=0; i<N; i++){
+        b = randombugbase(1);        // 1 => alive, placed in nodes
+        utPutAlive(b);
+    }
+    for(i=N; i<NMAX; i++){
+        b = randombug(0);        // 0 => dead, not placed
+        utPutDead(b);
+    }
+}
+
 
 void splitbug(Bug *b)
 {
@@ -33,6 +47,7 @@ void splitbug(Bug *b)
     bb->food /= 2.0;
 //    checkAlive();
     mutatebug(bb);
+    mutatebug(b);               // mutate both children...
     tst = 0; cnt=0;
     while(tst == 0){
         cnt++;
@@ -91,6 +106,49 @@ Bug* randombug(int alive)
     if(alive){
         b -> x = n_rand(ROWL);
         b -> y = n_rand(NROWS);
+        nn = NODE(b->x,b->y);
+        for(i=0,done=0; i<MAXTRY; i++){
+            if(nodes[NODE(b->x,b->y)].bug ==0){
+                done=1;         // don't set nodes here; done in utPutAlive
+                break;
+            }
+            else{
+                b -> x = n_rand(ROWL);
+                b -> y = n_rand(NROWS);
+            }
+        }
+        if(!done){
+            fprintf(stderr,"Couldn't place bug after MAXTRY tries.\n");
+            exit(10);
+        }
+        b->alive = 1;
+    }
+    else{
+        b->alive = 0;
+    }
+    return b;
+}
+
+Bug* randombugbase(int alive)
+{                               // put all bugs on 1st row of lattice
+    if(alive>0.95*ROWL){
+        fprintf(stderr,"trying to put too many bugs on the base.\n");
+        exit(2);
+    }
+    Bug * b;
+    int i,done,nn,ns;
+    b = (Bug *) calloc(1,sizeof (Bug));
+    b -> thisbug = b;
+    b -> food = 1.0;
+    for(i=0;i<NMOVE;i++){
+        b->movex[i] = choosemove();
+        b->movey[i] = choosemove();
+    }
+    b->mutrate = mutrate;          // initialize to global for now...
+
+    if(alive){
+        b -> x = n_rand(ROWL);
+        b -> y = 0;             // puts the bug on the base
         nn = NODE(b->x,b->y);
         for(i=0,done=0; i<MAXTRY; i++){
             if(nodes[NODE(b->x,b->y)].bug ==0){

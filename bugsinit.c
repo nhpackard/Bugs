@@ -38,7 +38,7 @@ void bugsinit(int ac, char *av[])
     ninit = 100;
     tax = 0.0;
     basectl = 0;
-    foodctl = 0;
+    foodctl = 2;
 
 // end default... now change if option passed.........
     while ((c = getopt(ac, (char **) av, "s:t:n:X:m:f:x:N:b:F:h")) != -1) {
@@ -91,12 +91,16 @@ void bugsinit(int ac, char *av[])
         initbugs(ninit);
     }
     switch(foodctl){
-    default:
     case 0:
         initfoodsquare(nodes);
         break;
     case 1:
         initfoodtree(nodes);
+        break;
+    default:
+    case 2:
+        initfoodboxes(nodes);
+        break;
     }
 }
 
@@ -297,10 +301,34 @@ void initfoodsquare(Node *nn)
         nn[top*ROWL+i].food = 0.3;
     }
     for(i=0; i<top; i++){
-        nn[lside+ROWL*i].food = 0.3;
-        nn[rside+ROWL*i].food = 0.3;
+        nn[i*ROWL+lside].food = 0.3;
+        nn[i*ROWL+rside].food = 0.3;
     }
 }
+
+
+void initfoodboxes(Node *nn)
+{
+    int i,j,spacex,spacey,bsize,kk,k,idx,bspace;
+
+    bsize = 3;
+    bspace = 2;
+    spacey = bspace;
+    for(j=0;j<NROWS;j+=spacey+bspace){
+        spacex = bspace;
+        for(i=0;i<ROWL;i+=spacex+bspace){
+            for(kk=0;kk<bsize;kk++){
+                for(k=0;k<bsize;k++){
+                    idx = (j+kk)*ROWL+i+k;
+                    nn[idx].food = 0.3;
+                }
+            }
+            spacex += bspace;
+        }
+        spacey += bspace;
+    }
+}
+            
 
 void initfoodtree(Node *nn)
 {

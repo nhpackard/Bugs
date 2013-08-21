@@ -108,6 +108,7 @@ extern void bugcolor(double , double);
 // inits.c
 extern void initfoodsquare(Node *);
 extern void initfoodtree(Node *);
+extern void initfoodboxes(Node *);
 
 // bugutil.c
 extern Bug* randombug(int alive);

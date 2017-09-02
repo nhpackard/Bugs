@@ -8,14 +8,15 @@
 
 
 int ncount=0, nsteps=0;
-int slowctl = 10;
-int datactl = 10;
+int slowctl = 1;
+int datactl = 1;
 int transient = 0;
 
-Bug * Alive = NULL;
-Bug * Dead  = NULL;
+Bug * Alive;
+Bug * Dead;
 Bug * btst;
-Node nodes[NMAX];
+Node *nodes;
+int idxcur;
 int Nalive, Ndead;
 int pipe_pop;
 
@@ -54,7 +55,6 @@ int main(int ac,char **av){
     fprintf(stderr,"Bugs!\n");
 
 	float xx,yy;
-
 	glutInit(&ac, (char**) av);
     bugsinit(ac,av);
 

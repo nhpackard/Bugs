@@ -7,7 +7,7 @@ from random import *
 import sys
 from time import sleep
 import collections
-import pdb;
+# import pdb;
 
 argv = sys.argv
 if len(argv)>1:
@@ -18,7 +18,7 @@ else:
     
     
 maxact = 4000                            # max number of activity traces in graph...
-Width = 300
+Width = 700
 Height = 200
 ymax = 200
 ymax = 100000

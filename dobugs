@@ -43,7 +43,7 @@ popfile="$out/population"
 graphpop.py $popfile &
 #graphpop.py  &
 echo "launched graphpop.py..."
-graphact.py $actfile &
+graphactivity.py $actfile &
 #graphact.py  &
 echo "launched graphact.py..."
 while [ ! -e $actfile ]

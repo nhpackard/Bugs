@@ -96,17 +96,17 @@ void bugcolor_init()
     for(i=0;i<256;i++){
         for(j=0;j<256;j++){
             idx = (i<<8) | j;
-            R = j/256.0;
-            G = i/128.0;
-            B = j/256.0;
+            R = j/(256.0);
+            G = i/(128.0);
+            B = j/(256.0);
             sg_color[idx] = RGBcolor(R,G,B);
         }
     }
 }
 
-void bugcolor(double food,double other)
+void bugcolor(double food,double bugfood)
 {
-    unsigned int idx,ifood,iother;
+    unsigned int idx,ifood,ibugfood;
 	static int first=1;
 	if(first){
 		bugcolor_init();
@@ -114,11 +114,11 @@ void bugcolor(double food,double other)
 	}
     food = food > 1 ? 1 : food;
     food = food < 0 ? 0 : food;
-    other = other > 1 ? 1 : other;
-    other = other < 0 ? 0 : other;
-    ifood = food*255;
-    iother = other*255;
-    idx = (ifood<<8) | iother;
+    bugfood = bugfood > 1 ? 1 : bugfood;
+    bugfood = bugfood < 0 ? 0 : bugfood;
+    ifood =  food*(255);
+    ibugfood =  bugfood*(255);
+    idx = (ifood<<8) | ibugfood;
     gl_color = sg_color[idx];
 }
 

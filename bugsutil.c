@@ -1,6 +1,5 @@
 #include "bugs.h"
 
-
     
 // ------------------------ beginning of routines that use the hash sets
 
@@ -11,12 +10,13 @@ void initbugs(int N)
 {
     int i;
     Bug * b;
+
     for(i=0; i<N; i++){
         b = randombug(1);        // 1 => alive, placed in nodes
         utPutAlive(b);
     }
     for(i=N; i<NMAX; i++){
-        b = randombug(0);        // 0 => dead, not placed
+        b = randombug(0);        // 0 => not placed
         utPutDead(b);
     }
 }
@@ -39,6 +39,7 @@ void initbugsbase(int N)
 void splitbug(Bug *b)
 {
     int tst,cnt;
+    int tmp;
     Bug * bb;
 //    checkAlive();
     bb = utGetDead();           // now not dead but not yet alive... limbo
@@ -48,27 +49,29 @@ void splitbug(Bug *b)
 //    checkAlive();
     mutatebug(bb);
     mutatebug(b);               // mutate both children...
+    bb->alive = 0;              // denote new one as newborn
     tst = 0; cnt=0;
-    while(tst == 0){
+    while(tst == 0){            // find a new place for the kid
         cnt++;
         tst = jitterbug(bb);
-        if(tst==-1){
+        if(tst==-1){            // couldn't find a place for it
             utPutDead(bb);      // back to dead
             break;
-        }
+        } // -1 => bug died during jittering
         if(tst==1){
             utPutAlive(bb);     // made it to alive
             break;
         }
     }
 //    checkAlive();
-    return;                     // -1 => bug died during jittering
+    return;                     // 
 }
 
 void killbug(Bug *b)
 {
     int nn;
     nn = NODE(b->x,b->y);
+    nodes[nn].bug=0;
 //    assert(nodes[nn].bug == b);
 //    nodes[nn].bug = 0;  bug might not have been placed yet...
     if(!utInAlive(b))
@@ -77,11 +80,20 @@ void killbug(Bug *b)
     utPutDead(b);
 }
 
+void killfreebug(Bug *b)        // kill a bug that was wandering from jitterbug()
+{                               // avoid zeroing bug in the site
+    if(!utInAlive(b))
+        fprintf(stderr,"Ack, trying to kill bug %d that is not alive.",(int) b);
+    utDelAlive(b);
+    utPutDead(b);
+//    assert(utInAlive(b)==0 && utInDead(b)==1);
+}
+
 // -------------------- end of routines that use the hash sets
 
 #define MAXTRY 2*NMAX
 
-int choosemove()
+int choosemove()                // choose a random position
 {
     int ns,nn;
     ns = n_rand(2);         // could probably be more efficient here...
@@ -200,57 +212,78 @@ void mutatebug(Bug *b)
 }
         
 
-void movebug(Bug *b,int dx,int dy)
-{
+int movebug(Bug *b,int dx,int dy)
+{                               // return 1 if moved successfully.  0 if dies.
     int cnt,nn;
-//    checkAlive();
-    if(utInDead(b))             // in the unlikely event a dead bug is being asked to move...
-        return;
+    int tmp;
+    static int jitterkill=0;
+    if(utInDead(b)){             // in the unlikely event a dead bug is being asked to move...
+        perror("Dead bug moving!\n");
+        return(0);
+    }
     Bug * btmp;
     b->food -= movetax*(abs(dx)+abs(dy));
+    if(b->alive==0)             // newborn, don't mess with it.
+        return(0);
     if(b->food <0){
         killbug(b);
-        nn = NODE(b->x,b->y);   // current node
-        nodes[nn].bug=0;
-        return;
+        return(0);
     }
+//    tmp = checkbugs();
+//    if(tmp>0){
+//        fprintf(stderr,"Nalive = %d --- Nlattice = %d\n",Nalive,bugNodes());
+//        fprintf(stderr,"checkbug = %d\n",tmp);
+//    }
     nn = NODE(b->x,b->y);   // current node
-    nodes[nn].bug=0;
+    nodes[nn].bug=0;        // empty the current node, bug leaves
     b->x = ADDX(b->x,dx);
     b->y = ADDY(b->y,dy);
     nn = NODE(b->x,b->y);   // new node
-    btmp = nodes[nn].bug;   // old bug at new node (if present)
-    nodes[nn].bug = b;      // install b at new node
-    if(btmp != 0){          // find a new place for the old one
-        int tst=0;
+    btmp = nodes[nn].bug;   // old bug at new node (if present), 0 if empty
+    int tst=0;
+    if(btmp==0){                // no old bug, install current.
+        nn = NODE(b->x,b->y);   // new node
+        nodes[nn].bug = b;
+        if(checkbugs()!=0){
+            fprintf(stderr,"checkbugs = %d fail.\n",checkbugs());
+            cnt = 1;
+        }
+    }
+    else {          // must find a new place for the current moving one
+        cnt=0;
         while(tst == 0){
-            tst = jitterbug(btmp);
+            tst = jitterbug(b);
+            cnt++;
             if(tst==-1){
-                killbug(btmp);
-                break;
+                killfreebug(b); // not killbug because don't want to change the node.  In case there is a bug there...
+//                assert(utInAlive(b)==0 && utInDead(b)==1);
+                jitterkill++;
+                return(0);
             }
             if(tst==1){
-                nn = NODE(btmp->x,btmp->y); // 
-                nodes[nn].bug=btmp;         // don't use utPutAlive because btmp is already alive.
+                nn = NODE(b->x,b->y); // 
+                nodes[nn].bug=b;         // don't use utPutAlive because btmp is already alive.
                 break;
             }
         }
-//        checkAlive();
-        cnt = 1;                // for debug
     }
-    if(nodes[nn].food>0)
+
+    if(nodes[nn].food>0)        // eat
         b->food += mouthfull;
-    else
+    else                        // or world tax
         b->food -= tax;
-    if(b->food >1)
-        splitbug(b);                
+    cnt = 0;
     if(b->food <0){
         killbug(b);
-        nn = NODE(b->x,b->y);   // current node
-        nodes[nn].bug=0;
-        return;
+        cnt = 1;
+//        assert(checkbugs()==0);
+        return(0);
     }
-//    checkAlive();
+    if(b->food >1){             // reproduce
+        splitbug(b);                
+        cnt = 10;
+    }
+    return(1);
 }
 
 int jitterbug(Bug *b)          // jitter x,y until find an empty spot
@@ -258,12 +291,12 @@ int jitterbug(Bug *b)          // jitter x,y until find an empty spot
     int dx,dy,nn;
     dx = choosemove();
     dy = choosemove();
+    b->x = ADDX(b->x,dx);
+    b->y = ADDY(b->y,dy);
     b->food -= movetax*(abs(dx)+abs(dy));
     if(b->food<0){
         return -1;
     }
-    b->x = ADDX(b->x,dx);
-    b->y = ADDY(b->y,dy);
     nn = NODE(b->x,b->y);
     if(nodes[nn].bug == 0){     // success
         return 1;
@@ -287,8 +320,8 @@ void sensemove(Bug *b)
     assert(sense < NMOVE);
     dx = b->movex[sense];
     dy = b->movey[sense];
-    doact(sense,dx,dy);
-    movebug(b,dx,dy);
+    if(movebug(b,dx,dy))
+        doact(sense,dx,dy);
 }
     
 int bugNodes()
@@ -299,35 +332,4 @@ int bugNodes()
             cnt++;
     return cnt;
 }
-int bugNotAlive()
-{
-    int i,cnt;
-    for(i=0,cnt=0; i<NMAX; i++)
-        if(nodes[i].bug>0)
-           if(!utInAlive(nodes[i].bug))
-            cnt++;
-    return cnt;
-}
 
-void checkbugs()
-{
-    int i,cnt;
-    for(i=0,cnt=0; i<NMAX; i++)
-        if(nodes[i].bug !=0)
-            cnt++;
-    printf("\nNalive=%d, %d on lattice.\n",Nalive,cnt);
-    printf("Ndead=%d, %d blanks on lattice.\n",Ndead,NMAX-cnt);
-    checkhash();
-}
-
-int checkAlive()
-{
-    int cnt,cntt;
-    cnt = bugNodes();
-    cntt=bugNotAlive();
-    if(Nalive-cnt>0 || cntt>0){
-        fprintf(stderr,"Nalive = %d, %d onlattice.\n",Nalive,cnt);
-        fprintf(stderr,"%d of %d on lattice not alive.\n",cntt,cnt);
-        cnt=0;                  // for debug...
-    }
-}

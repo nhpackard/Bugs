@@ -6,7 +6,6 @@
 #include "uthash.h"
 
 #define REAL double
-#define RES 0		// resolution switch...
 
 #define RES 0		// resolution switch...
 #if RES == 0
@@ -87,8 +86,9 @@ extern int transient;
 
 extern Bug * Alive;
 extern Bug * Dead;
+extern int idxcur;
 extern Bug * btst;
-extern Node nodes[];
+extern Node *nodes;
 extern int Nalive, Ndead;
 extern int ninit;
 
@@ -110,14 +110,14 @@ extern void initfoodsquare(Node *);
 extern void initfoodtree(Node *);
 extern void initfoodboxes(Node *);
 
-// bugutil.c
+// bugsutil.c
 extern Bug* randombug(int alive);
 extern Bug* randombugbase(int alive);
 extern void initbugs(int N);
 extern void initbugsbase(int N);
 extern void copybug(Bug *b, Bug *bb);
 extern void killbug(Bug *b);
-extern void movebug(Bug *b,int dx,int dy);
+extern int movebug(Bug *b,int dx,int dy);
 extern int  jitterbug(Bug *b);          // jitter x,y until find an empty spot
 extern void sensemove(Bug *b);
 extern void splitbug(Bug *b);
@@ -152,14 +152,19 @@ extern void utDelDead(Bug * b);
 extern Bug * utGetDead();
 extern int utInAlive(Bug * b);
 extern int utInDead(Bug * b);
-extern void checkhash();
+extern int checkhash();
+extern void checkDead();
+extern int cntDead();
+extern int cntAlive();
+extern int cntNotAlive();
+extern int cntActivity();
+
 
 // displays.c
 extern void display();
 
 //inits.c
-extern void initnodescb(Node * nn);
-extern void initnodescb1(Node * nn);
+extern void initnodescb();
 extern void setnodes(Node * nn,int val);
 extern void rannodes(Node *nn, float dens);
 extern void pnodes(Node *nn, int start);

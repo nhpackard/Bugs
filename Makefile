@@ -17,7 +17,7 @@ LIBS = -framework OpenGL -framework GLUT -framework Carbon $(ARCH)
 OBJ = $(TG).o glgraph.o vWindow.o displays.o kbd.o uthash.o bugsutil.o bugsinit.o
 
 $(TG):	$(OBJ)
-	cc -o $(TG) $(OBJ) $(LIBS)
+	cc -g -o $(TG) $(OBJ) $(LIBS)
 
 HEADERS = glgraph.h bugs.h
 $(OBJ): $(HEADERS)

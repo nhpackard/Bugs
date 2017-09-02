@@ -1,4 +1,4 @@
-// rushdiag version...
+// vbase version...
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
@@ -9,9 +9,7 @@
 #include <Carbon/Carbon.h>	// for Delay(), ExitToShell()
 //#include <QuickTime/QuickTime.h>
 #include "glgraph.h"
-//#include "rstuff.h"
-#include "bugs.h"
-
+#include "rstuff.h"
 #if 0						// defined in Carbon.h
 struct Rect {
    short    top;
@@ -34,10 +32,8 @@ int gl_wind;
 int gl_pen = 0;
 int gl_fullscreen = 0;
 float gl_xhold,gl_yhold,gl_zhold;
-//#define DEFAULTX 640
-//#define DEFAULTY 640
-int gl_xsize=640,gl_ysize=480;		// default screen size
-int gl_ix = 640, gl_iy = 480;		// default texture size
+int gl_xsize=640,gl_ysize=480;
+int gl_ix = 640, gl_iy = 480;		// default screen size
 int gl_left = 320, gl_top = 54;		// default screen position
 
 long	gl_scrnsize,gl_mode,gl_dbl,gl_BPL,gl_SPL;
@@ -61,13 +57,12 @@ int gl_ctl = 0;
 int gl_opt = 0;
 int gl_count = 10;					// to enable single key presses
 int gl_print  = 0;
-float gl_delt = 1;					// adjust rate of parameter change
+float gl_delt = .5;					// adjust rate of parameter change
 int gl_flip = 0;					// mirror reversal flag
 float gl_xpos=0,gl_ypos=0,gl_zpos=0;
 float gl_xrot=0,gl_yrot=0,gl_zrot=0;
 float gl_fovy=60;					// field of view for gluPerspective()
 float gl_zset;						// z axis camera position
-float gl_zoom = 1;					// display zoom
 float gl_amp = -80;
 long gl_lines = 79;
 int gl_bwctl = 1;
@@ -89,6 +84,7 @@ extern Rect vidRect;
 extern void videoDisplay();
 extern void initvid(int,int);
 //extern unsigned short Vout[SIZEX * SIZEY];
+extern unsigned long Vout[SIZEX * SIZEY];
 extern void *Vptr;
 
 void initgraph(char *cname)
@@ -103,7 +99,7 @@ printhelp();
 //gl_ix = vidRect.right; gl_iy = vidRect.bottom;	// default is 640 x 480
 
 glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA);
-glutInitWindowSize(gl_xsize, gl_ysize);
+glutInitWindowSize(gl_ix, gl_iy);
 glutInitWindowPosition(gl_left, gl_top);
 gl_wind = glutCreateWindow(cname);
 
@@ -113,7 +109,6 @@ gluPerspective(gl_fovy, (float)gl_ix/(float)gl_iy, .1f, 10000.0f);
 glScalef(1,-1,1);
 theta = (gl_fovy / 360.0) * pi;				// half angle
 gl_zset = (.5 * gl_iy) / tan(theta);
-gl_zset *= gl_zoom;
 glTranslatef(-gl_ix/2, -gl_iy/2 , -gl_zset);	// window scaled to (gl_ix, gl_iy)
 
 glShadeModel(GL_FLAT);					
@@ -159,19 +154,10 @@ scale(0,1,0,1);		// default scaling
 wind(0,gl_ix-1,0,gl_iy-1);
 }
 
-void prefsize(long ix,long iy)		// display window size
-{
-gl_xsize = ix;
-gl_ysize = iy;
-gl_ix=ix;
-gl_iy=iy;
-}
-
-void prefrez(long ix,long iy)		// texture size (call after above)
+void prefsize(long ix,long iy)
 {
 gl_ix=ix;
 gl_iy=iy;
-//gl_zoom = gl_ix/gl_xsize;
 }
 
 void prefposition(long ix,long iy)
@@ -1736,4 +1722,350 @@ y -= gl_otop;
 y *= gl_oyfact;
 iy = y;
 labit(ix,iy);
+}
+
+// keyboard (and mouse) stuff
+
+void keyCB(unsigned char key, int x, int y)
+{
+if(glutGetModifiers() & 1) gl_shift = 1;
+if(glutGetModifiers() & 2) gl_ctl = 1;
+if(glutGetModifiers() & 4) gl_opt = 1;
+
+gl_keys[key] = 1;	// mark key pressed
+//printf("key down %d\n",key);
+
+switch(key)
+	{
+	case 27:		// escape
+		printf("rob shaw  april 2009\n");
+		printf("rob@haptek.com\n\n");
+		exit(0);
+	case 'c':
+		break;
+	case 'e':
+		break;
+	case 'f':
+		{
+		gl_fullscreen ^= 1;
+		if(gl_fullscreen)
+			glutFullScreen();
+		else
+			{
+//			printf("%d %d\n",gl_xsize,gl_ysize);
+			glutPositionWindow(gl_left, gl_top);
+			glutReshapeWindow(gl_ix, gl_iy);
+			}
+		break;
+		}
+	case 'r':
+		{
+		gl_flip ^= 1;
+		break;
+		}
+	case 'o':
+		{
+		float dt;
+//		printf("gl_tm.tv_sec %d\n",gl_tm.tv_sec);
+		gettimeofday(&gl_tm1,NULL);
+		dt = gl_tm1.tv_sec - gl_tm.tv_sec + .000001 * (gl_tm1.tv_usec - gl_tm.tv_usec);
+		gl_tm.tv_sec = gl_tm1.tv_sec;
+		gl_tm.tv_usec = gl_tm1.tv_usec;
+		printf("elapsed time %.2f\t",dt);
+		printf("frames per second %.2f\n",gl_framecount/dt);
+		gl_framecount = 0;
+		break;
+		}
+#if 0
+	case 'v':		// toggle video frame rate counting
+		{
+		gl_vframerate ^= 1;
+		if(gl_vframerate)
+			{
+			printf("video frame rate\n");
+			gl_delt *= 8;	// speed up buttons
+			}
+		else
+			{
+			printf("timer frame rate\n");
+			gl_delt /= 8;
+			}
+		break;
+		}
+#endif
+	case 'i':		// toggle black/white
+		{
+		gl_bwctl ^= 1;
+		if(gl_bwctl)
+			{
+			g_backcolor(BLACK);
+			g_color(WHITE);
+			}
+		else
+			{
+			g_backcolor(WHITE);
+			g_color(BLACK);
+			}
+		break;
+		}
+	case 'p':		// print parameters
+{
+pausectl ^= 1;
+break;
+}
+	case 'P':		// print parameters
+		{
+		gl_print ^= 1;
+		if(gl_print == 1)
+			{
+//			printf("amp %.2f  nlines %ld\n",gl_amp,gl_lines);
+			printf("xpos %.2f  ypos %.2f  zpos %.2f\n",gl_xpos,gl_ypos,gl_zpos);
+			printf("xrot %.2f  yrot %.2f  zrot %.2f\n",gl_xrot,gl_yrot,gl_zrot);
+			printf("printing on\n");
+			}
+		else
+			printf("printing off\n");
+		break;
+		}
+	case 'h':		// print help
+		{
+		printhelp();
+		break;
+		}
+	case 'R':
+		gl_xpos = gl_ypos = gl_zpos = 0;
+		gl_xrot = gl_yrot = gl_zrot = 0;
+		break;
+	case 's':
+		if(gl_opt) {
+			gl_sync ^= 1;
+			CGLSetParameter(CGLGetCurrentContext(), kCGLCPSwapInterval, &gl_sync);
+			if(gl_sync) printf("screen sync on\n");
+			else printf("screen sync off\n"); }
+		else {
+			slowctl *= 10;
+			if(slowctl >= 10000)
+				slowctl = 1; }
+		break;
+	case 'S':
+		slowctl /= 10;
+		if(slowctl == 0) slowctl = 1;
+		break;
+	case '!':			// shift 1 (to back through presets)
+		break;
+	case '1':
+		firstex = 0;	// for image reset, glTexImage2D()
+//		++texctl;
+//		if(texctl > 1)
+//			texctl = 0;
+		break;
+	case '2':
+		++gl_overlay;
+		if(gl_overlay > 2)
+			gl_overlay = 0;
+		break;
+	case '3':
+		--gl_timer;
+		if(gl_timer < 0) gl_timer = 0;
+		printf("timer %d  max fps %.1f\n",gl_timer,1000.0/gl_timer);
+		break;
+	case '#':
+		gl_timer -= 10;
+		if(gl_timer < 0) gl_timer = 0;
+		printf("timer %d  max fps %.1f\n",gl_timer,1000.0/gl_timer);
+		break;
+	case '4':
+		++gl_timer;
+		printf("timer %d  max fps %.1f\n",gl_timer,1000.0/gl_timer);
+		break;
+	case '$':
+		gl_timer += 10;
+		printf("timer %d  max fps %.1f\n",gl_timer,1000.0/gl_timer);
+		break;
+	case '5':
+		break;
+	case '6':
+		break;
+	case '7':
+		break;
+	case '8':
+		break;
+	}
+}
+
+void keyUpCB(unsigned char key, int x, int y)
+{
+	int rtn;
+
+	gl_keys[key] = 0;			// mark key released
+	if(key >= 97)
+		gl_keys[key-32] = 0;	// also mark shifted key released
+	if(key >= 65 && key <= 93)
+		gl_keys[key+32] = 0;
+	if(key == 60)				// special case '<'
+		gl_keys[44] = 0;
+	if(key == 62)				// special case '>'
+		gl_keys[46] = 0;
+	if(key == 44)				// special case ','
+		gl_keys[60] = 0;
+	if(key == 46)				// special case '.'
+		gl_keys[62] = 0;
+	if((rtn = glutGetModifiers()) == 1)
+		gl_shift = 0;
+//	printf("key %d\n",key);
+	gl_count = 100 / (2*gl_lines) + 20;	// set delay until key repeat...
+}
+
+void specialKeyPressed(int key, int x, int y)
+{
+gl_keys[key+256] = 1;	// mark key pressed
+if(glutGetModifiers() & 1) gl_shift = 1;
+if(glutGetModifiers() & 2) gl_ctl = 1;
+if(glutGetModifiers() & 4) gl_opt = 1;
+//	printf("special key %d\n",key);
+if(gl_keys[101+256])	// up arrow
+	{
+	if(!gl_opt)			// not a display rotation
+		{
+		}
+	}
+if(gl_keys[103+256])	// down arrow
+	{
+	if(!gl_opt)			// not a display rotation
+		{
+		}
+	}
+
+if(gl_keys[100+256])	// left arrow
+	{
+	if(!gl_opt)			// not a display rotation
+		{
+		}
+	}
+if(gl_keys[102+256])	// right arrow
+	{
+	if(!gl_opt)			// not a display rotation
+		{
+		}
+	}
+
+}
+
+void specialKeyUp(int key, int x, int y)
+{
+	gl_keys[key+256] = 0;	// mark key released
+gl_shift = gl_ctl = gl_opt = 0;	// turn these on and off every keystroke
+}
+
+// button = 0 default			(GLUT_LEFT_BUTTON)
+// button = 1 for alt click		(GLUT_MIDDLE_BUTTON)
+// button = 2 for ctl click		(GLUT_RIGHT_BUTTON)
+void clickCB(int button, int state, int x, int y)	// mouse click
+{
+//printf("%d %d %d %d\n",button,state,x,y);
+if(!state)
+	glutSetCursor(GLUT_CURSOR_INFO);	// little hand icon
+else
+	glutSetCursor(GLUT_CURSOR_NONE);
+	
+gl_imx = x; gl_imy = y;
+gl_butnum = button; gl_butstate = state;
+gl_mousex = (float)x/(float)gl_xsize;
+gl_mousey = (float)y/(float)gl_ysize;
+//printf("%f %f\n",gl_mousex,gl_mousey);
+}
+
+void mouseCB(int x, int y)	// mouse motion
+{
+printf("%d %d\n",x,y);
+}
+
+void updatekeys()
+{
+if(gl_opt) {
+if(gl_keys[100+256])	// left arrow
+	gl_yrot -= 1 * gl_delt;
+if(gl_keys[102+256])	// right arrow
+	gl_yrot += 1 * gl_delt;
+if(gl_keys[101+256])	// up arrow
+	gl_zpos += 10 * gl_delt;
+if(gl_keys[103+256])	// down arrow
+	gl_zpos -= 10 * gl_delt;
+if(gl_keys['['])				// left
+	gl_xpos -= 10 * gl_delt;
+if(gl_keys[']'])				// right
+	gl_xpos += 10 * gl_delt;
+if(gl_keys['{'])				// down
+	gl_ypos += 10 * gl_delt;
+if(gl_keys['}'])				// up
+	gl_ypos -= 10 * gl_delt;
+if(gl_keys['.'])				// x axis rotations
+	gl_xrot -= 1 * gl_delt;
+if(gl_keys[','])
+	gl_xrot += 1 * gl_delt;
+if(gl_keys['<'])				// z axis rotations
+	gl_zrot -= 1 * gl_delt;
+if(gl_keys['>'])
+	gl_zrot += 1 * gl_delt; }
+#if 0
+if(gl_keys['-'])
+	{
+	gl_amp -= 3 * gl_delt;
+	if(gl_print) printf("%.2f\n",gl_amp);
+	}
+if(gl_keys['='])
+	{
+	gl_amp += 3 * gl_delt;
+	if(gl_print) printf("%.2f\n",gl_amp);
+	}
+if(gl_keys['9'])
+	{
+	--gl_count;
+	if(gl_count < 0) --gl_lines;
+	if(gl_lines < 1) gl_lines = 1;
+	if(gl_print) printf("lines %ld\n",gl_lines);
+	}
+if(gl_keys['0'])
+	{
+	--gl_count;
+	if(gl_count < 0) ++gl_lines;
+	if(gl_lines >= vidRect.bottom) gl_lines = vidRect.bottom - 1;
+	if(gl_print) printf("lines %ld\n",gl_lines);
+	}
+#endif
+}
+
+void printhelp()
+{
+//printf("\n1 - toggle Vptr[], Vout[] display\n");
+//printf("2 - video, overlay, video and overlay\n");
+printf("-------- graphics ---------\n");
+printf("\n3, 4 - decrease, increase timer interval\n");
+printf("shift 3, 4 - steps of 10 milliseconds\n");
+printf("option up, down arrow keys - zoom\n");
+printf("option left, right keys - y axis rotation\n");
+printf("option [ , ] keys - move left, right\n");
+printf("option { , } keys - move down, up\n");
+printf("option , , . keys - x axis rotation\n");
+printf("option < , > keys - z axis rotation\n");
+//printf("9 , 0 keys - vary number of lines\n");
+////printf("- , = keys - vary line displacement amplitude\n");
+printf("f - toggle full screen\n");
+printf("i - toggle black, white inversion\n");
+printf("r - toggle mirror reflection\n");
+printf("\n-------- domino simulation ---------\n");
+printf("\n5 - very soft dominos\n");
+printf("6 - soft dominos\n");
+printf("7 - nhp dominos\n");
+printf("(shift - 10x, ctl - 100x)\n");
+printf("right, left arrow keys - increase, lower temperature\n");
+printf("up, down arrow keys - increase, decrease number of dominos\n");
+printf("p - print parameters\n");
+printf("R - reset position\n");
+printf("o - print frames per second\n");
+//printf("v - sync to video frame rate\n");
+printf("s - speed up: increase number of iterations per frame by 10x\n");
+printf("S - slow down: decrease number of iterations per frame by 10x\n");
+printf("h - print help\n");
+printf("<esc> - exit\n\n");
 }

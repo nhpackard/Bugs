@@ -83,6 +83,7 @@ typedef struct {
 
 extern int ncount, nsteps;
 extern int slowctl;
+extern int pausectl;
 extern int transient;
 
 extern Bug * Alive;

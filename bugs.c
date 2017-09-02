@@ -9,6 +9,7 @@
 
 int ncount=0, nsteps=0;
 int slowctl = 10;
+int pausectl = 0;
 int datactl = 10;
 int transient = 0;
 

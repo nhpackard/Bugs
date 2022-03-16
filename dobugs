@@ -44,8 +44,9 @@ graphpop.py $popfile &
 #graphpop.py  &
 echo "launched graphpop.py..."
 graphact.py $actfile &
-#graphact.py  &
 echo "launched graphact.py..."
+#activity.py $actfile &
+#echo "launched activity.py..."
 while [ ! -e $actfile ]
 do
 echo "waiting a sec..."

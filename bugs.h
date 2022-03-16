@@ -7,8 +7,6 @@
 
 #define REAL double
 #define RES 0		// resolution switch...
-
-#define RES 0		// resolution switch...
 #if RES == 0
 #define CELLSZ 0.01
 //#define CELLSZ (.01*256.0/360.0)

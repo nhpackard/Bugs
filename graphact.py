@@ -18,7 +18,7 @@ else:
     
     
 maxact = 4000                            # max number of activity traces in graph...
-Width = 300
+Width = 600
 Height = 200
 ymax = 200
 ymax = 100000
@@ -38,7 +38,7 @@ def trace(screen, colvalvec):            # eachcolval = [key,activityvalue]
         yvals.append(colval[1])
         cnt += 1
         if cnt>maxact:
-            print "too many activity points..."
+            print("too many activity points...")
             break
     # do the scroll:
     if ncount<Width:      # first, don't scroll
@@ -46,8 +46,8 @@ def trace(screen, colvalvec):            # eachcolval = [key,activityvalue]
                  for y in yvals]
         cnt1 = 0
         for i in range(len(yvals)):
-            x = ncount
-            y = yvals[i]
+            x = int(ncount)
+            y = int(yvals[i])
             col = cols[i]
             screen.set_at((x,y),col)
     else:                           # then scroll
@@ -58,7 +58,7 @@ def trace(screen, colvalvec):            # eachcolval = [key,activityvalue]
                   (Width-1,Height),(Width-1,0))
         for i in range(len(yvals)):
             x = Width-1
-            y = yvals[i]
+            y = int(yvals[i])
             col = cols[i]
             screen.set_at((x,y),col)
     ncount += 1
@@ -83,25 +83,29 @@ palette = tuple(spec(x/256.) for x in range(256))
 def omain():
     system("rm -f /tmp/activity; mkfifo -m 666 /tmp/activity")
     pipename = "/tmp/activity"
-    print 'opening',pipename
+    print('opening',pipename)
     pipefd = open(pipename,"r")
-    print 'opened',pipename
+    print('opened',pipename)
     while True:
         dat = pipefd.readline()
         dat = [int(x) for x in dat.split()]
-        print dat
-        print '\n---------------\n'
+        print(dat)
+        print('\n---------------\n')
 
 def main():
     global ymax
     system("rm -f /tmp/activity; mkfifo -m 666 /tmp/activity")
     pipename = "/tmp/activity"
     
-    print 'opening',pipename
+    print('opening',pipename)
     pipefd = open(pipename,"r")
-    print 'opened',pipename
+    print('opened',pipename)
     
     # foo = Graph(0,250,Width,Height,"Activity")
+    x = 800
+    y = 300 
+    os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (x,y)
+    init()                  #  pygame init
     screen = display.set_mode([Width, Height])
     display.set_caption("Activity")
     draw.rect(screen, [100, 100, 100],(0, 0 , Width, Height + 1), 0)
@@ -119,16 +123,16 @@ def main():
                     return
                 elif ee.key == K_PLUS:
                     ymax = ymax * 2
-                    print 'new ymax =',ymax
+                    print('new ymax =',ymax)
                 elif ee.key == K_KP_PLUS:
                     ymax = ymax * 2
-                    print 'new ymax =',ymax
+                    print('new ymax =',ymax)
                 elif ee.key == K_EQUALS:
                     ymax = ymax * 2
-                    print 'new ymax =',ymax
+                    print('new ymax =',ymax)
                 elif ee.key == K_MINUS:
                     ymax = ymax / 2
-                    print 'new ymax =',ymax
+                    print('new ymax =',ymax)
         """
         yval = cnt%Height
         col = palette[cnt%255]
@@ -138,16 +142,16 @@ def main():
         try:
             dat = pipefd.readline()
         except:
-            print 'had a problem reading activity pipe.'
+            print('had a problem reading activity pipe.')
         dat = [int(x) for x in dat.split()]
         ldat = len(dat)
         if ldat == 0:
             return
         if ldat % 4:
-            print "length of activity output not multiple of 4!"
-            print '++++++++++ '
-            print dat
-            print '---------------\n'
+            print("length of activity output not multiple of 4!")
+            print('++++++++++ ')
+            print(dat)
+            print('---------------\n')
         if datfile != None:            # write to external file
             for dd in dat:
                 datout.write(str(dd)+' ')

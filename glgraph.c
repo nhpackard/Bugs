@@ -34,7 +34,7 @@ int gl_fullscreen = 0;
 float gl_xhold,gl_yhold,gl_zhold;
 int gl_xsize=640,gl_ysize=480;
 int gl_ix = 640, gl_iy = 480;		// default screen size
-int gl_left = 320, gl_top = 54;		// default screen position
+int gl_left = 50, gl_top = 50;		// default screen position
 
 long	gl_scrnsize,gl_mode,gl_dbl,gl_BPL,gl_SPL;
 float	gl_oleft=0,gl_oright=1,gl_obottom=0,gl_otop=1,gl_oznear= -1,gl_ozfar=1;	// ortho() default
@@ -2053,6 +2053,7 @@ printf("option < , > keys - z axis rotation\n");
 printf("f - toggle full screen\n");
 printf("i - toggle black, white inversion\n");
 printf("r - toggle mirror reflection\n");
+/*
 printf("\n-------- domino simulation ---------\n");
 printf("\n5 - very soft dominos\n");
 printf("6 - soft dominos\n");
@@ -2066,6 +2067,7 @@ printf("o - print frames per second\n");
 //printf("v - sync to video frame rate\n");
 printf("s - speed up: increase number of iterations per frame by 10x\n");
 printf("S - slow down: decrease number of iterations per frame by 10x\n");
+*/
 printf("h - print help\n");
 printf("<esc> - exit\n\n");
 }

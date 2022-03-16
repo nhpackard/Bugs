@@ -5,23 +5,28 @@ from pygame import *
 from math import *
 from random import *
 import sys
+import os
 from time import sleep
 import collections
 
 argv = sys.argv
 if len(argv)>1:
     datfile = argv[1]
-    print 'outputting pop data to',datfile
+    print('outputting pop data to',datfile)
     datout = open(datfile,"w")
 else:
     datfile = None
 
 
-WIN_W = 300
+WIN_W = 600
 WIN_H = 200
 class Graph :
     def __init__ (self, posx, posy, Width, Height, legend):        
         # pygame init
+        x = 800
+        y = 50
+        os.environ['SDL_VIDEO_WINDOW_POS'] = "%d,%d" % (x,y)
+        init()                  #  pygame init
         self.screen = display.set_mode([WIN_W, WIN_H])
         display.set_caption(legend)
         font.init()
@@ -106,9 +111,9 @@ from os import system
 def main():
     system("rm -f /tmp/population; mkfifo -m 666 /tmp/population")
     pipename = "/tmp/population"
-    print 'opening',pipename
+    print('opening',pipename)
     pipefd = open(pipename,"r")
-    print 'opened',pipename
+    print('opened',pipename)
     
     foo = Graph(0,0,WIN_W,WIN_H,"population")
     foo.trace(100.0)
@@ -129,7 +134,7 @@ def main():
             return
             # dat = fromfile(pipefd,float,1,sep=' ')
             #            dat = 500.0*sin(cnt/8.0)
-            #            print dat
+            #            print(dat)
         foo.trace(dat)
         foo.refresh()
         if datfile != None:

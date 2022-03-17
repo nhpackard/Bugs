@@ -81,7 +81,7 @@ void bugsinit(int ac, char *av[])
     }
     initpop();
     initact();
-	initnodescb(nodes);			// initializes neighbors
+    initnodescb(nodes);			// initializes neighbors
     switch(basectl){
     case 1:
         initbugsbase(ninit);

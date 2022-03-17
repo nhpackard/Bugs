@@ -56,7 +56,7 @@
 #define NODE(x,y) ((y)*ROWL + (x))
 
 #define NMOVE 512               // size of the brain:  map from nbhd config to motion vectors
-#define MAXMV 4
+#define MAXMV 1
 
 typedef struct {
     // for uthash

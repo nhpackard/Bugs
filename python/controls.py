@@ -50,13 +50,28 @@ _WORKER          = os.path.join(os.path.dirname(__file__), "sdl_worker.py")
 _QUIT, _CMODE, _STEP, _FPS10, _PAUSED = 0, 1, 2, 3, 4
 
 # Probe strip-chart constants
-PROBE_W = 512
+PROBE_W = 1024
 PROBE_H = 128
 
 _AVAILABLE_PROBES = {
     'activity':   'Per-genome activity (scrolling hash-colored strip)',
     'q_activity': 'Activity quantile profile (decile strip chart)',
+    'ts':         'Scalar time-series (population, total food-in-bugs)',
+    'coloring':   'Bug-coloring: per-LUT-index move distribution (3x3 template)',
 }
+
+# Bit labels for the 3x3 Moore-neighborhood template, in reading order
+# (top→bottom, left→right). Bit i corresponds to _COLORING_LABELS[i].
+_COLORING_LABELS = ['NW', 'N ', 'NE',
+                    'W ', 'C ', 'E ',
+                    'SW', 'S ', 'SE']
+# Histogram bins for per-LUT-index (dx, dy) outputs (range [-15, 15])
+_COLORING_HIST_N = 31 * 31
+
+# Time-series probe: trace names + render colors (ARGB)
+_TS_TRACES = ('population', 'food_bug')
+_TS_COLORS = (0xFF44DD44, 0xFFFFAA22)   # green, orange
+_TS_N      = len(_TS_TRACES)
 
 
 def available_probes():
@@ -148,6 +163,45 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
             off += PROBE_W * 4
         q_activity_col = np.zeros(QA_N_DECILES, dtype=np.float32)
 
+    # ── Time-series (ts) probe setup ────────────────────────────────
+    ts_enabled     = bool((probes or {}).get('ts'))
+    ts_shm         = None
+    ts_cursor      = None
+    ts_traces      = None
+
+    if ts_enabled:
+        ts_shm_size = 4 + _TS_N * PROBE_W * 4
+        ts_shm = SharedMemory(create=True, size=ts_shm_size)
+        _tsbuf = np.ndarray((ts_shm_size,), dtype=np.uint8,
+                            buffer=ts_shm.buf)
+        _tsbuf[:] = 0
+        ts_cursor = np.ndarray((1,), dtype=np.int32,
+                               buffer=ts_shm.buf)
+        ts_traces = []
+        off = 4
+        for _ in range(_TS_N):
+            ts_traces.append(
+                np.ndarray((PROBE_W,), dtype=np.float32,
+                           buffer=ts_shm.buf, offset=off))
+            off += PROBE_W * 4
+
+    # ── Bug-coloring probe setup ───────────────────────────────────
+    coloring_enabled = bool((probes or {}).get('coloring'))
+    coloring_shm     = None
+    coloring_idx     = None   # shm[0]: int32 LUT index (0..N_GENES-1)
+    coloring_hist    = None   # shm[1..962]: int32 31x31 histogram
+
+    if coloring_enabled:
+        c_shm_size = 4 + _COLORING_HIST_N * 4
+        coloring_shm = SharedMemory(create=True, size=c_shm_size)
+        _cbuf = np.ndarray((c_shm_size,), dtype=np.uint8,
+                            buffer=coloring_shm.buf)
+        _cbuf[:] = 0
+        coloring_idx  = np.ndarray((1,), dtype=np.int32,
+                                   buffer=coloring_shm.buf)
+        coloring_hist = np.ndarray((31, 31), dtype=np.int32,
+                                   buffer=coloring_shm.buf, offset=4)
+
     # ── SDL2 subprocess ───────────────────────────────────────────
     cmd = [sys.executable, _WORKER,
            pixel_shm.name, ctrl_shm.name, str(N), str(px)]
@@ -155,6 +209,10 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
         cmd += ["--activity=" + activity_shm.name]
     if q_activity_enabled:
         cmd += ["--q-activity=" + q_activity_shm.name]
+    if ts_enabled:
+        cmd += ["--ts=" + ts_shm.name]
+    if coloring_enabled:
+        cmd += ["--coloring=" + coloring_shm.name]
     sdl_proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
@@ -186,6 +244,10 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
             all_shm.append(activity_shm)
         if q_activity_shm is not None:
             all_shm.append(q_activity_shm)
+        if ts_shm is not None:
+            all_shm.append(ts_shm)
+        if coloring_shm is not None:
+            all_shm.append(coloring_shm)
         for shm in all_shm:
             try:
                 shm.unlink()
@@ -286,6 +348,38 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
         _ymax_btns.append(_make_ymax_btns(
             "act_ymax", 2000, sim.update_act_ymax))
 
+    # ── Bug-coloring 3x3 template toggles ─────────────────────────────
+    coloring_box    = None
+    coloring_lbl    = None
+    _coloring_btns  = []
+
+    def _update_coloring_idx():
+        if not coloring_enabled:
+            return
+        idx = 0
+        for bi, btn in enumerate(_coloring_btns):
+            if btn.value:
+                idx |= (1 << bi)
+        coloring_idx[0] = idx
+        if coloring_lbl is not None:
+            coloring_lbl.value = f"LUT idx = {idx}"
+
+    if coloring_enabled:
+        for bi, label in enumerate(_COLORING_LABELS):
+            tb = widgets.ToggleButton(
+                value=False, description=label.strip(),
+                layout=widgets.Layout(width="40px", height="32px"))
+            tb.observe(lambda _c: _update_coloring_idx(), names='value')
+            _coloring_btns.append(tb)
+        coloring_box = widgets.GridBox(
+            children=_coloring_btns,
+            layout=widgets.Layout(
+                grid_template_columns="repeat(3, 44px)",
+                grid_gap="2px",
+                width="140px"))
+        coloring_lbl = widgets.Label(value="LUT idx = 0",
+                                     layout=widgets.Layout(width="120px"))
+
     color_dd   = widgets.Dropdown(
         options=COLOR_MODES, value=COLOR_MODES[colormode],
         description="Color:",
@@ -301,6 +395,8 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
     ]
     if _ymax_btns:
         _rows.append(widgets.HBox(_ymax_btns))
+    if coloring_box is not None:
+        _rows.append(widgets.HBox([coloring_box, coloring_lbl]))
     _rows.append(widgets.HBox([color_dd, status_lbl]))
     ipy_display(widgets.VBox(_rows))
 
@@ -339,6 +435,16 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
             for di in range(QA_N_DECILES):
                 q_activity_deciles[di][qa_cur] = q_activity_col[di]
             q_activity_cursor[0] = (qa_cur + 1) % PROBE_W
+        if ts_enabled:
+            ts_cur = int(ts_cursor[0])
+            ts_traces[0][ts_cur] = float(sim.get_population())
+            ts_traces[1][ts_cur] = float(sim.get_food_bug())
+            ts_cursor[0] = (ts_cur + 1) % PROBE_W
+        if coloring_enabled:
+            gi = int(coloring_idx[0])
+            hist_ptr = coloring_hist.ctypes.data_as(
+                ctypes.POINTER(ctypes.c_int32))
+            sim._lib.bugs_bug_coloring_hist(gi, hist_ptr)
 
     def on_step(_):
         if not _alive[0]:
@@ -384,6 +490,21 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
             fig.savefig("probe_q_activity.png", dpi=150)
             plt.close(fig)
             saved += 1
+        if ts_enabled:
+            cur = int(ts_cursor[0])
+            t   = np.arange(PROBE_W)
+            fig, ax = plt.subplots(figsize=(8, 3))
+            for ti, name in enumerate(_TS_TRACES):
+                y = np.roll(ts_traces[ti], -cur)
+                ax.plot(t, y, linewidth=0.8, label=name)
+            ax.set_yscale('log')
+            ax.set_title("time series")
+            ax.set_xlabel("t (relative)")
+            ax.legend(fontsize=8)
+            fig.tight_layout()
+            fig.savefig("probe_ts.png", dpi=150)
+            plt.close(fig)
+            saved += 1
         status_lbl.value = f"Saved {saved} probe plot(s)" if saved \
                            else "No scalar probes to save"
 
@@ -417,6 +538,10 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
             q_activity_cursor[0] = 0
             for di in range(QA_N_DECILES):
                 q_activity_deciles[di][:] = 0
+        if ts_enabled:
+            ts_cursor[0] = 0
+            for ti in range(_TS_N):
+                ts_traces[ti][:] = 0
 
         sim.colorize(pixels, st['colormode'])
         status_lbl.value = "Restarted — t=0  (paused)"

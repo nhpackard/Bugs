@@ -7,14 +7,19 @@
  * Bugs — port of CocoaBugs' "Packard Bugs" model to C.
  *
  * Agents live on an N×N periodic grid with a float food field F(x) ∈ [0, 1].
- * Each bug carries a lookup table of 32 movement genes indexed by a 5-bit
- * neighborhood pattern:
+ * Each bug carries a lookup table of 512 movement genes indexed by a 9-bit
+ * neighborhood pattern (3×3 Moore neighborhood, visual reading order
+ * with y increasing upward):
  *
- *     bit 0 : F(x, y+1) > food_threshold      (up)
- *     bit 1 : F(x-1, y) > food_threshold      (left)
- *     bit 2 : F(x,   y) > food_threshold      (self)
- *     bit 3 : F(x+1, y) > food_threshold      (right)
- *     bit 4 : F(x, y-1) > food_threshold      (down)
+ *     bit 0 : F(x-1, y+1) > food_threshold   (NW)
+ *     bit 1 : F(x,   y+1) > food_threshold   (N)
+ *     bit 2 : F(x+1, y+1) > food_threshold   (NE)
+ *     bit 3 : F(x-1, y  ) > food_threshold   (W)
+ *     bit 4 : F(x,   y  ) > food_threshold   (C / self)
+ *     bit 5 : F(x+1, y  ) > food_threshold   (E)
+ *     bit 6 : F(x-1, y-1) > food_threshold   (SW)
+ *     bit 7 : F(x,   y-1) > food_threshold   (S)
+ *     bit 8 : F(x+1, y-1) > food_threshold   (SE)
  *
  * Each gene encodes one of 120 moves: 8 directions × 15 magnitudes (1..15).
  * Stored as (int8_t dx, int8_t dy, uint8_t mag, uint8_t dir) per slot.
@@ -23,7 +28,7 @@
  */
 #define CELL_PX  4
 
-#define N_GENES       32
+#define N_GENES      512   /* 2^9, one per 9-bit Moore neighborhood pattern */
 #define MAG_MAX       15
 #define N_DIRS         8
 
@@ -107,5 +112,17 @@ int  bugs_get_act_ymax(void);
 /* ── Activity quantile probe (9 deciles p10..p90) ──────────────────── */
 
 void bugs_q_activity_deciles(float *deciles_out);
+
+/* ── Bug-coloring probe (per-LUT-index move distribution) ──────────── */
+
+/* For a chosen 9-bit LUT index (0..N_GENES-1), compute a 31×31 histogram
+ * of per-bug move outputs across the live population. For each bug b, the
+ * gene b->genome.genes[gene_idx] yields (dx, dy) in [-15, 15]; the cell
+ * at hist[(dy+15)*31 + (dx+15)] is incremented.
+ *
+ * hist_out must point to a 31*31 = 961-element int32 buffer. It is zeroed
+ * before filling.  gene_idx outside [0, N_GENES) results in an all-zero
+ * histogram. */
+void bugs_bug_coloring_hist(int gene_idx, int32_t *hist_out);
 
 #endif /* BUGS_H */

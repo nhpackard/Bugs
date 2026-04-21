@@ -362,17 +362,21 @@ static void diffuse_once(void)
     float *tmp = F_food; F_food = F_temp; F_temp = tmp;
 }
 
-/* ── Neighborhood → 5-bit gene index ───────────────────────────────── */
+/* ── Neighborhood → 9-bit gene index (Moore) ───────────────────────── */
 
 static inline int neighborhood_gene(int x, int y)
 {
     float t = g_food_threshold;
     int g = 0;
-    if (F_food[gidx(x,   y+1)] > t) g |=  1;   /* up    */
-    if (F_food[gidx(x-1, y  )] > t) g |=  2;   /* left  */
-    if (F_food[gidx(x,   y  )] > t) g |=  4;   /* self  */
-    if (F_food[gidx(x+1, y  )] > t) g |=  8;   /* right */
-    if (F_food[gidx(x,   y-1)] > t) g |= 16;   /* down  */
+    if (F_food[gidx(x-1, y+1)] > t) g |=   1;  /* NW  */
+    if (F_food[gidx(x,   y+1)] > t) g |=   2;  /* N   */
+    if (F_food[gidx(x+1, y+1)] > t) g |=   4;  /* NE  */
+    if (F_food[gidx(x-1, y  )] > t) g |=   8;  /* W   */
+    if (F_food[gidx(x,   y  )] > t) g |=  16;  /* C   */
+    if (F_food[gidx(x+1, y  )] > t) g |=  32;  /* E   */
+    if (F_food[gidx(x-1, y-1)] > t) g |=  64;  /* SW  */
+    if (F_food[gidx(x,   y-1)] > t) g |= 128;  /* S   */
+    if (F_food[gidx(x+1, y-1)] > t) g |= 256;  /* SE  */
     return g;
 }
 
@@ -608,6 +612,22 @@ void bugs_q_activity_deciles(float *deciles_out)
         deciles_out[d] = buf[idx];
     }
     free(buf);
+}
+
+/* ── Bug-coloring: per-LUT-index move histogram ───────────────────── */
+
+void bugs_bug_coloring_hist(int gene_idx, int32_t *hist_out)
+{
+    memset(hist_out, 0, 31 * 31 * sizeof(int32_t));
+    if (gene_idx < 0 || gene_idx >= N_GENES) return;
+    for (int i = 0; i < n_alive; i++) {
+        bug_t *b = &bug_pool[alive_ids[i]];
+        gene_t mv = b->genome.genes[gene_idx];
+        int bx = (int)mv.dx + 15;
+        int by = (int)mv.dy + 15;
+        if (bx < 0 || bx > 30 || by < 0 || by > 30) continue;
+        hist_out[by * 31 + bx]++;
+    }
 }
 
 /* ── Time step ─────────────────────────────────────────────────────── */

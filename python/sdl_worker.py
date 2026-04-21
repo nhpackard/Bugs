@@ -6,7 +6,8 @@ All output goes to the terminal where Jupyter was started.
 
 Usage (internal):
     python sdl_worker.py <pixel_shm> <ctrl_shm> <N> <px> \\
-                         [--activity=<shm>] [--q-activity=<shm>]
+                         [--activity=<shm>] [--q-activity=<shm>] \\
+                         [--ts=<shm>] [--coloring=<shm>]
 
 ctrl_shm layout (5 × int32)
     [0] quit      1 = exit
@@ -20,9 +21,14 @@ import math
 import sys
 import traceback
 
-PROBE_W     = 512
+PROBE_W     = 1024
 PROBE_H     = 128
 TITLE_BAR_H = 28   # macOS title bar estimate
+
+# Bug-coloring histogram window: 31x31 bins × BIN_PX = window size.
+COLORING_BIN_PX = 10
+COLORING_W      = 31 * COLORING_BIN_PX   # 310
+COLORING_H      = 31 * COLORING_BIN_PX
 
 
 def _c(argb):
@@ -46,6 +52,13 @@ _QA_COLORS = [
     _c(0xFFFF4422),  # p80
     _c(0xFFFF1144),  # p90 - red
 ]
+
+# Time-series trace colors (must match _TS_COLORS in controls.py).
+_TS_COLORS = [
+    _c(0xFF44DD44),  # population - green
+    _c(0xFFFFAA22),  # food_bug   - orange
+]
+_TS_LABELS = ['pop', 'food_bug']
 
 
 def _render_q_activity(dst, decile_bufs, cursor, global_max):
@@ -101,6 +114,103 @@ def _render_q_activity(dst, decile_bufs, cursor, global_max):
     return global_max
 
 
+def _render_coloring(dst, hist, lut_idx):
+    """Render a 31x31 (dx, dy) move histogram as filled squares with
+    log-scaled intensity (grayscale).  Also draw a small 3x3 template
+    representation in the top-left corner so the user can verify which
+    LUT index is being probed."""
+    import numpy as np
+
+    dst[:COLORING_H, :COLORING_W] = BG_COLOR
+
+    hmax = int(hist.max()) if hist.size else 0
+    if hmax > 0:
+        # log1p -> normalize so hmax maps to 255
+        lg   = np.log1p(hist.astype(np.float64))
+        lg  /= max(lg.max(), 1e-9)
+        vals = (lg * 255.0).astype(np.int32)
+        for i in range(31):       # i = dy index; visual y = COLORING_H-1 - i*BIN_PX
+            for j in range(31):
+                v = int(vals[i, j])
+                if v <= 0:
+                    continue
+                # ARGB gray
+                col = _c(0xFF000000 | (v << 16) | (v << 8) | v)
+                y0 = (30 - i) * COLORING_BIN_PX
+                x0 = j * COLORING_BIN_PX
+                dst[y0:y0 + COLORING_BIN_PX,
+                    x0:x0 + COLORING_BIN_PX] = col
+
+    # Center crosshair at (dx=0, dy=0) → bin (15, 15)
+    cx = 15 * COLORING_BIN_PX + COLORING_BIN_PX // 2
+    cy = (30 - 15) * COLORING_BIN_PX + COLORING_BIN_PX // 2
+    dst[cy, max(cx - 3, 0):min(cx + 4, COLORING_W)] = _c(0xFF4080FF)
+    dst[max(cy - 3, 0):min(cy + 4, COLORING_H), cx] = _c(0xFF4080FF)
+
+    # 3x3 template in top-left showing bits of lut_idx
+    # Bit layout: [NW, N, NE, W, C, E, SW, S, SE] in reading order (row-major).
+    pad = 4
+    cell = 10
+    for b in range(9):
+        col_ = b % 3
+        row  = b // 3
+        x0 = pad + col_ * cell
+        y0 = pad + row  * cell
+        col = _c(0xFFFFFF00) if (lut_idx & (1 << b)) else _c(0xFF333333)
+        dst[y0:y0 + cell - 2, x0:x0 + cell - 2] = col
+
+
+def _render_ts(dst, trace_bufs, cursor, global_max):
+    """Render scalar time-series as log-Y colored lines.
+
+    trace_bufs: list of float32[PROBE_W] arrays.
+    global_max: running max across the session (scales Y stably).
+    """
+    import numpy as np
+
+    dst[:PROBE_H, :PROBE_W] = BG_COLOR
+
+    rolled = [np.roll(b, -cursor) for b in trace_bufs]
+
+    # Pool all positive samples to fix log-Y range.
+    pos_samples = []
+    for r in rolled:
+        p = r[r > 0]
+        if len(p):
+            pos_samples.append(p)
+    if not pos_samples:
+        return global_max
+    cat = np.concatenate(pos_samples)
+    lo = float(cat.min())
+    hi = float(cat.max())
+    global_max = max(global_max, hi)
+    if lo <= 0:
+        lo = 1.0
+    hi = global_max
+    if hi <= lo:
+        hi = lo * 10.0
+    log_lo = math.log10(lo)
+    log_hi = math.log10(hi)
+    span = log_hi - log_lo
+    if span < 0.01:
+        span = 1.0
+    log_hi += span * 0.10
+    scale = (PROBE_H - 1) / (log_hi - log_lo)
+
+    xs = np.arange(PROBE_W)
+    for ti, r in enumerate(rolled):
+        col = _TS_COLORS[ti % len(_TS_COLORS)]
+        mask = r > 0
+        if not mask.any():
+            continue
+        lv = np.log10(r[mask])
+        ys = np.clip(((log_hi - lv) * scale).astype(int), 0, PROBE_H - 1)
+        dst[ys, xs[mask]] = col
+
+    dst[:PROBE_H, PROBE_W - 1] = CURSOR_COLOR
+    return global_max
+
+
 def main():
     if len(sys.argv) < 5:
         print("Bugs SDL: bad args", flush=True)
@@ -114,17 +224,25 @@ def main():
 
     activity_shm_name   = None
     q_activity_shm_name = None
+    ts_shm_name         = None
+    coloring_shm_name   = None
     for arg in sys.argv[5:]:
         if arg.startswith("--activity="):
             activity_shm_name = arg[len("--activity="):]
         elif arg.startswith("--q-activity="):
             q_activity_shm_name = arg[len("--q-activity="):]
+        elif arg.startswith("--ts="):
+            ts_shm_name = arg[len("--ts="):]
+        elif arg.startswith("--coloring="):
+            coloring_shm_name = arg[len("--coloring="):]
 
     ACT_H = 2 * PROBE_H  # 256
 
     print(f"Bugs SDL: starting  N={N} px={px}  "
           f"activity={bool(activity_shm_name)}  "
-          f"q_activity={bool(q_activity_shm_name)}", flush=True)
+          f"q_activity={bool(q_activity_shm_name)}  "
+          f"ts={bool(ts_shm_name)}  "
+          f"coloring={bool(coloring_shm_name)}", flush=True)
 
     import numpy as np
     from multiprocessing.shared_memory import SharedMemory
@@ -181,6 +299,45 @@ def main():
             print(f"Bugs SDL: q_activity SharedMemory open failed: {e}",
                   flush=True)
             q_activity_shm_name = None
+
+    # ── coloring shared memory ───────────────────────────────────
+    coloring_shm    = None
+    coloring_idx    = None   # [0]: current LUT index (0..511)
+    coloring_hist   = None   # [1..961]: 31x31 int32 histogram
+    if coloring_shm_name:
+        try:
+            coloring_shm  = SharedMemory(name=coloring_shm_name)
+            coloring_idx  = np.ndarray((1,), dtype=np.int32,
+                                       buffer=coloring_shm.buf)
+            coloring_hist = np.ndarray((31, 31), dtype=np.int32,
+                                       buffer=coloring_shm.buf, offset=4)
+            print("Bugs SDL: coloring shm opened (31x31)", flush=True)
+        except Exception as e:
+            print(f"Bugs SDL: coloring SharedMemory open failed: {e}",
+                  flush=True)
+            coloring_shm_name = None
+
+    # ── ts (time-series) shared memory ───────────────────────────
+    TS_N          = len(_TS_LABELS)
+    ts_shm        = None
+    ts_cursor     = None
+    ts_traces     = None
+    if ts_shm_name:
+        try:
+            ts_shm = SharedMemory(name=ts_shm_name)
+            ts_cursor = np.ndarray((1,), dtype=np.int32,
+                                   buffer=ts_shm.buf)
+            ts_traces = []
+            off = 4
+            for _ in range(TS_N):
+                ts_traces.append(
+                    np.ndarray((PROBE_W,), dtype=np.float32,
+                               buffer=ts_shm.buf, offset=off))
+                off += PROBE_W * 4
+            print(f"Bugs SDL: ts shm opened ({TS_N}x{PROBE_W})", flush=True)
+        except Exception as e:
+            print(f"Bugs SDL: ts SharedMemory open failed: {e}", flush=True)
+            ts_shm_name = None
 
     COLOR_MODES = ["red-bugs", "genome-hash", "bug-food"]
 
@@ -317,6 +474,75 @@ def main():
         else:
             print("Bugs SDL: q_activity window creation failed", flush=True)
 
+    # ── ts window ────────────────────────────────────────────────
+    ts_window_p   = None
+    ts_surface_p  = None
+    ts_dst        = None
+    ts_global_max = 0.0
+    if ts_shm is not None:
+        tsw_x = main_x - PROBE_W
+        tsw = sdl2.SDL_CreateWindow(
+            b"time series",
+            tsw_x, next_probe_y,
+            PROBE_W, PROBE_H,
+            sdl2.SDL_WINDOW_SHOWN,
+        )
+        if tsw:
+            actual_y = ctypes.c_int(0)
+            sdl2.SDL_GetWindowPosition(tsw, None, ctypes.byref(actual_y))
+            next_probe_y = actual_y.value + PROBE_H + real_title_h
+            tsps = sdl2.SDL_GetWindowSurface(tsw)
+            if tsps:
+                sdl2.SDL_SetSurfaceBlendMode(tsps, sdl2.SDL_BLENDMODE_NONE)
+                tssurf  = tsps.contents
+                tsp_i32 = tssurf.pitch // 4
+                tsp_ptr = ctypes.cast(tssurf.pixels,
+                                      ctypes.POINTER(ctypes.c_int32))
+                tsd_flat = np.ctypeslib.as_array(tsp_ptr,
+                                                 shape=(PROBE_H * tsp_i32,))
+                ts_dst       = tsd_flat.reshape(PROBE_H, tsp_i32)
+                ts_window_p  = tsw
+                ts_surface_p = tsps
+                print("Bugs SDL: ts window created", flush=True)
+            else:
+                sdl2.SDL_DestroyWindow(tsw)
+        else:
+            print("Bugs SDL: ts window creation failed", flush=True)
+
+    # ── coloring window ─────────────────────────────────────────
+    col_window_p  = None
+    col_surface_p = None
+    col_dst       = None
+    if coloring_shm is not None:
+        cw_x = main_x - COLORING_W
+        cw = sdl2.SDL_CreateWindow(
+            b"bug coloring",
+            cw_x, next_probe_y,
+            COLORING_W, COLORING_H,
+            sdl2.SDL_WINDOW_SHOWN,
+        )
+        if cw:
+            actual_y = ctypes.c_int(0)
+            sdl2.SDL_GetWindowPosition(cw, None, ctypes.byref(actual_y))
+            next_probe_y = actual_y.value + COLORING_H + real_title_h
+            cps = sdl2.SDL_GetWindowSurface(cw)
+            if cps:
+                sdl2.SDL_SetSurfaceBlendMode(cps, sdl2.SDL_BLENDMODE_NONE)
+                csurf  = cps.contents
+                cp_i32 = csurf.pitch // 4
+                cp_ptr = ctypes.cast(csurf.pixels,
+                                     ctypes.POINTER(ctypes.c_int32))
+                cd_flat = np.ctypeslib.as_array(cp_ptr,
+                                                shape=(COLORING_H * cp_i32,))
+                col_dst       = cd_flat.reshape(COLORING_H, cp_i32)
+                col_window_p  = cw
+                col_surface_p = cps
+                print("Bugs SDL: coloring window created", flush=True)
+            else:
+                sdl2.SDL_DestroyWindow(cw)
+        else:
+            print("Bugs SDL: coloring window creation failed", flush=True)
+
     print("Bugs SDL: entering main loop", flush=True)
 
     event = sdl2.SDL_Event()
@@ -366,6 +592,22 @@ def main():
             sdl2.SDL_UnlockSurface(qa_surface_p)
             sdl2.SDL_UpdateWindowSurface(qa_window_p)
 
+        # ts (time-series) window
+        if ts_window_p is not None and ts_traces is not None:
+            sdl2.SDL_LockSurface(ts_surface_p)
+            cur_ts = int(ts_cursor[0])
+            ts_global_max = _render_ts(ts_dst, ts_traces,
+                                       cur_ts, ts_global_max)
+            sdl2.SDL_UnlockSurface(ts_surface_p)
+            sdl2.SDL_UpdateWindowSurface(ts_window_p)
+
+        # coloring window
+        if col_window_p is not None and coloring_hist is not None:
+            sdl2.SDL_LockSurface(col_surface_p)
+            _render_coloring(col_dst, coloring_hist, int(coloring_idx[0]))
+            sdl2.SDL_UnlockSurface(col_surface_p)
+            sdl2.SDL_UpdateWindowSurface(col_window_p)
+
         # Window title
         step   = int(ctrl[2])
         mode   = COLOR_MODES[min(int(ctrl[1]), 2)]
@@ -380,6 +622,10 @@ def main():
         sdl2.SDL_SetWindowTitle(window_p, title.encode())
 
     print("Bugs SDL: exiting cleanly", flush=True)
+    if col_window_p is not None:
+        sdl2.SDL_DestroyWindow(col_window_p)
+    if ts_window_p is not None:
+        sdl2.SDL_DestroyWindow(ts_window_p)
     if qa_window_p is not None:
         sdl2.SDL_DestroyWindow(qa_window_p)
     if act_window_p is not None:
@@ -392,6 +638,10 @@ def main():
         activity_shm.close()
     if q_activity_shm is not None:
         q_activity_shm.close()
+    if ts_shm is not None:
+        ts_shm.close()
+    if coloring_shm is not None:
+        coloring_shm.close()
 
 
 if __name__ == "__main__":

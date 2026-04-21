@@ -4,13 +4,18 @@ bugs_py.py — Python ctypes wrapper for the Bugs C library.
 Bugs model (Packard Bugs, Bedau & Packard 1991)
 ----------------------------------------------
 Agents live on an N×N periodic grid with a float food field F(x) ∈ [0, 1].
-Each bug carries 32 movement genes indexed by a 5-bit neighborhood pattern:
+Each bug carries 512 movement genes indexed by a 9-bit neighborhood
+pattern (3×3 Moore neighborhood, visual reading order, y increases upward):
 
-    bit 0 : F(x, y+1) > food_threshold      (up)
-    bit 1 : F(x-1, y) > food_threshold      (left)
-    bit 2 : F(x,   y) > food_threshold      (self)
-    bit 3 : F(x+1, y) > food_threshold      (right)
-    bit 4 : F(x, y-1) > food_threshold      (down)
+    bit 0 : F(x-1, y+1) > food_threshold    (NW)
+    bit 1 : F(x,   y+1) > food_threshold    (N)
+    bit 2 : F(x+1, y+1) > food_threshold    (NE)
+    bit 3 : F(x-1, y  ) > food_threshold    (W)
+    bit 4 : F(x,   y  ) > food_threshold    (C / self)
+    bit 5 : F(x+1, y  ) > food_threshold    (E)
+    bit 6 : F(x-1, y-1) > food_threshold    (SW)
+    bit 7 : F(x,   y-1) > food_threshold    (S)
+    bit 8 : F(x+1, y-1) > food_threshold    (SE)
 
 Each gene encodes one of 120 moves: 8 directions × 15 magnitudes.
 """
@@ -21,9 +26,45 @@ import os
 import numpy as np
 
 
-N_GENES  = 32
-MAG_MAX  = 15
-N_DIRS   = 8
+NBHD       = 'moore'
+NBHD_BITS  = 9
+N_GENES    = 1 << NBHD_BITS   # 512 entries, one per 9-bit Moore pattern
+MAG_MAX    = 15
+N_DIRS     = 8
+
+# Repo root (parent of Bugs/) — PNG templates live under CocoaBugs/
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Built-in food-source PNG templates (from the original Obj-C plugin resources).
+_FOOD_TEMPLATES = {
+    'stripes':      'CocoaBugs/Stripes.png',
+    'r-pentomino':  'CocoaBugs/R-pentomino.png',
+    'big_box':      'CocoaBugs/Big box.png',
+    '3x3_boxes':    'CocoaBugs/3x3 boxes.png',
+    'empty_boxes':  'CocoaBugs/Empty boxes.png',
+}
+
+
+def food_templates():
+    """Return {name: absolute_path} for all built-in food-source PNG templates."""
+    return {n: os.path.join(_REPO_ROOT, p) for n, p in _FOOD_TEMPLATES.items()}
+
+
+def _load_food_png(path_or_name, N):
+    """Load a PNG into an (N, N) float32 brightness array in [0, 1].
+
+    `path_or_name` is either a built-in template name (see food_templates()),
+    an absolute filesystem path, or a path relative to the repo root.
+    """
+    from PIL import Image
+    if path_or_name in _FOOD_TEMPLATES:
+        path = os.path.join(_REPO_ROOT, _FOOD_TEMPLATES[path_or_name])
+    elif os.path.isabs(path_or_name):
+        path = path_or_name
+    else:
+        path = os.path.join(_REPO_ROOT, path_or_name)
+    img = Image.open(path).convert('L').resize((N, N), Image.NEAREST)
+    return (np.asarray(img, dtype=np.float32) / 255.0)
 
 
 def _find_lib():
@@ -151,6 +192,11 @@ class Bugs:
         L.bugs_q_activity_deciles.argtypes   = [ctypes.POINTER(ctypes.c_float)]
         L.bugs_q_activity_deciles.restype    = None
 
+        # bug-coloring: per-LUT-index 31x31 move histogram
+        L.bugs_bug_coloring_hist.argtypes    = [ctypes.c_int,
+                                                ctypes.POINTER(ctypes.c_int32)]
+        L.bugs_bug_coloring_hist.restype     = None
+
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     def init(self, N, **kwargs):
@@ -274,13 +320,38 @@ class Bugs:
 
     def state(self, food_source='uniform', food_source_value=1.0,
               food_source_thresh=0.5, brightness=None,
-              seed_density=0.1):
-        """Initialize food field and bug population from parameters."""
+              template=None, seed_density=0.1):
+        """Initialize food field and bug population from parameters.
+
+        food_source:
+          'uniform'    — uniform F_source = food_source_value everywhere
+          'brightness' — load `brightness` (np.ndarray, or str path / template
+                         name) as grayscale in [0,1]; threshold at
+                         food_source_thresh (pixels below → food, else 0)
+          'template'   — shorthand: load built-in PNG template by name (see
+                         Bugs.food_templates()), threshold at food_source_thresh
+          'custom'     — use `brightness` directly as F_source (no threshold)
+        """
         self._state_params = {}
-        if food_source == 'brightness':
+        if food_source == 'template':
+            if template is None:
+                raise ValueError(
+                    "food_source='template' requires template=<name> "
+                    f"(one of {list(_FOOD_TEMPLATES)})")
+            img = _load_food_png(template, self._N)
+            self.set_food_source_from_brightness(img, food_source_thresh)
+            self._state_params['food_source']        = 'template'
+            self._state_params['template']           = template
+            self._state_params['food_source_thresh'] = float(food_source_thresh)
+        elif food_source == 'brightness':
             if brightness is None:
                 raise ValueError("food_source='brightness' requires brightness=")
-            self.set_food_source_from_brightness(brightness, food_source_thresh)
+            if isinstance(brightness, str):
+                img = _load_food_png(brightness, self._N)
+                self.set_food_source_from_brightness(img, food_source_thresh)
+                self._state_params['brightness'] = brightness
+            else:
+                self.set_food_source_from_brightness(brightness, food_source_thresh)
         elif food_source == 'custom':
             if brightness is None:
                 raise ValueError("food_source='custom' requires src array")
@@ -370,6 +441,15 @@ class Bugs:
             out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
         return out
 
+    def bug_coloring_hist(self, gene_idx):
+        """Compute a 31x31 histogram of per-bug (dx, dy) outputs at LUT
+        index `gene_idx`. Row i → dy = i - 15, col j → dx = j - 15."""
+        out = np.zeros((31, 31), dtype=np.int32)
+        self._lib.bugs_bug_coloring_hist(
+            int(gene_idx),
+            out.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)))
+        return out
+
     # ── Recipe export ─────────────────────────────────────────────────
 
     def export_recipe(self, descriptor, probes=None, colormode=0):
@@ -386,7 +466,9 @@ class Bugs:
         filepath = os.path.join(runs_dir, filename)
 
         recipe = {
-            'version': 1,
+            'version': 2,
+            'nbhd': NBHD,                     # 'moore' (9-bit) or 'von_neumann' (5-bit)
+            'n_genes': N_GENES,
             'created': datetime.now().isoformat(timespec='seconds'),
             'descriptor': descriptor,
             'N': self._N,
@@ -437,6 +519,16 @@ def import_run(filepath=None, recipe='init', lib_path=None):
 
     with open(filepath) as f:
         data = json.load(f)
+
+    # Neighborhood-compatibility check.
+    # v1 recipes (pre-Moore) have no 'nbhd' field; treat as legacy von_neumann.
+    recipe_nbhd = data.get('nbhd', 'von_neumann')
+    if recipe_nbhd != NBHD:
+        raise ValueError(
+            f"recipe '{filepath}' was written for nbhd='{recipe_nbhd}' "
+            f"(n_genes={data.get('n_genes', 32)}) but the current build is "
+            f"nbhd='{NBHD}' (n_genes={N_GENES}). Recipes are not transferable "
+            f"across neighborhood topologies — genome structure differs.")
 
     mp = data['metaparams_init'] if recipe == 'init' else data['metaparams_final']
 

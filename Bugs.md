@@ -11,8 +11,18 @@ implementation lives in `plugins/Packard Bugs/` and is described in detail in
   fixed target `F_source`. Obj‑C had a static binary food bit.
 - Optional diffusion of the food field (`gdiff` passes per tick).
 - SplitMix64 RNG with `bugs_set_seed(...)` — Obj‑C used unseeded `random()`.
+- 9‑bit **Moore** neighborhood (3×3) indexing a 512‑gene LUT per bug
+  (Obj‑C used a 5‑cell Von Neumann plus‑shape → 32 genes).
 - Per‑genome activity probe with hash‑color strip chart.
 - 9‑decile quantile activity probe (`q_activity`).
+- Scalar time‑series probe (`ts`) with multiple colored traces (population,
+  total food‑in‑bugs).
+- Bug‑coloring probe (`coloring`): user picks a 9‑bit LUT index via a
+  clickable 3×3 template; probe plots a 31×31 histogram of per‑bug `(dx, dy)`
+  move outputs at that index.
+- Built‑in PNG food templates from the original CocoaBugs distribution
+  (`food_source='template'`).
+- Recipe file format v2 with nbhd compatibility guard.
 
 ## Layout
 
@@ -89,10 +99,11 @@ does *not* — always use the updaters.
 
 ```python
 sim.state(
-    food_source         = 'uniform',   # 'uniform' | 'brightness' | 'custom'
+    food_source         = 'uniform',   # 'uniform' | 'brightness' | 'custom' | 'template'
     food_source_value   = 1.0,         # used when food_source='uniform'
-    food_source_thresh  = 0.5,         # used when food_source='brightness'
-    brightness          = None,        # (N,N) or flat float32 in [0,1]
+    food_source_thresh  = 0.5,         # used when food_source in {'brightness', 'template'}
+    brightness          = None,        # (N,N) float32, or flat, or a PNG path (str)
+    template            = None,        # name from food_templates() when food_source='template'
     seed_density        = 0.1,         # per-cell probability of placing a bug
 )
 ```
@@ -197,15 +208,21 @@ large grids: a 512×512 sim at `CELL_PX=4` is a 2048×2048 window.
 ## Model (condensed)
 
 N×N periodic grid. Each cell has a float food value `F(x) ∈ [0, 1]`. Each
-bug carries 32 genes indexed by a 5‑bit neighborhood pattern:
+bug carries **512 genes** indexed by a **9‑bit Moore neighborhood** pattern
+(the full 3×3 including self), in visual reading order with y increasing
+upward:
 
-| bit | neighbor               |
-|-----|------------------------|
-| 0   | `F(x, y+1)`  (up)      |
-| 1   | `F(x-1, y)`  (left)    |
-| 2   | `F(x,   y)`  (self)    |
-| 3   | `F(x+1, y)`  (right)   |
-| 4   | `F(x, y-1)`  (down)    |
+| bit | neighbor                |
+|-----|-------------------------|
+| 0   | `F(x-1, y+1)`  (NW)     |
+| 1   | `F(x,   y+1)`  (N)      |
+| 2   | `F(x+1, y+1)`  (NE)     |
+| 3   | `F(x-1, y  )`  (W)      |
+| 4   | `F(x,   y  )`  (C/self) |
+| 5   | `F(x+1, y  )`  (E)      |
+| 6   | `F(x-1, y-1)`  (SW)     |
+| 7   | `F(x,   y-1)`  (S)      |
+| 8   | `F(x+1, y-1)`  (SE)     |
 
 A bit is set when `F(neighbor) > food_threshold`. Each gene encodes one of
 120 moves (8 directions × 15 magnitudes). Per tick:
@@ -221,7 +238,7 @@ A bit is set when `F(neighbor) > food_threshold`. Each gene encodes one of
      where the food bit was static.
    - Lose `movement_cost` (always applied, whether or not the bug ate — the
      Obj‑C original only charged it off‑food).
-   - Look up `genes[5-bit-neighborhood]`, move.
+   - Look up `genes[9-bit-neighborhood]`, move.
 
 See `../Docs/cocoabugs.md` §4–§5 for the reference semantics of the Obj‑C
 model and how this port diverges.
@@ -257,11 +274,31 @@ sim.state(food_source='uniform', food_source_value=1.0, seed_density=0.2)
 sim.state(food_source='brightness', brightness=img_array, food_source_thresh=0.5,
           seed_density=0.2)   # image-driven: dark pixels → food=1
 
+sim.state(food_source='brightness', brightness='path/to/image.png',
+          food_source_thresh=0.5, seed_density=0.2)   # PNG path fallback
+
+sim.state(food_source='template', template='r-pentomino',
+          food_source_thresh=0.5, seed_density=0.2)
+
 sim.state(food_source='custom', brightness=my_array, seed_density=0.2)  # raw
 ```
 
 `brightness` / custom arrays must be `(N, N)` or flat length `N*N`, `float32`
-in `[0, 1]`.
+in `[0, 1]`.  When `brightness=` is a string, it is treated as a PNG path and
+loaded (and resized to `N×N`) via Pillow.
+
+### Built‑in templates
+
+`bugs_py.food_templates()` returns the list of bundled names (PNGs copied from
+the original CocoaBugs distribution):
+
+- `stripes`
+- `r-pentomino`
+- `big_box`
+- `3x3_boxes`
+- `empty_boxes`
+
+These are loaded from `../CocoaBugs/*.png` relative to the repo root.
 
 ## Probes
 
@@ -280,11 +317,40 @@ color is one decile (blue = p10, green = p50, red = p90). Useful for seeing
 when a few dominant genotypes pull away from the bulk — watch the p90 line
 diverge from the median.
 
-Enable both:
+### `ts`
+
+Scalar time‑series probe — multiple colored traces overlaid on one log‑Y
+scrolling chart, sharing the `PROBE_W` pixel width. Current traces:
+
+- `population` — alive bug count (green)
+- `food_bug`   — total food summed over alive bugs (orange)
+
+The Y‑scale is shared across traces and adjustable via the `<| ts |>` buttons.
+
+### `coloring`
+
+Bug‑coloring probe. A 3×3 GridBox of toggle buttons (labelled NW..SE) lets you
+pick which of the nine Moore‑neighborhood bits are "on"; the resulting 9‑bit
+value selects one of the 512 LUT indices. Each tick the probe computes a
+31×31 histogram of per‑bug `(dx, dy)` outputs from `genes[lut_idx]` across the
+live population, rendered as a log1p grayscale grid with a center crosshair at
+`(0, 0)`. A miniature copy of the selected 3×3 template is inset in the corner
+so you can read back which neighborhood pattern you're probing.
+
+This is the numerical analogue of the CocoaBugs `BugsColoringWindowController`,
+but instead of literally coloring bugs, it visualises the distribution of
+motions a population would take if every bug saw the selected neighborhood.
+
+Enable probes:
 
 ```python
-run_with_controls(sim, probes={'activity': True, 'q_activity': True})
+run_with_controls(sim, probes={'activity': True, 'q_activity': True,
+                               'ts': True, 'coloring': True})
 ```
+
+Probe sub‑windows render at `PROBE_W = 1024` pixels wide (doubled from the
+previous 512) — the Python‑backed simulator is fast enough that the extra
+horizontal detail is cheap.
 
 ## Recipes (reproducible runs)
 
@@ -306,6 +372,14 @@ run_with_controls(sim, **display_kwargs)
 ```
 
 `import_run()` with no arguments lists available recipes.
+
+### Recipe format v2
+
+Recipes now carry a `version` field, plus `nbhd` (e.g. `'moore'`) and
+`n_genes` (e.g. `512`). `import_run()` raises `ValueError` if the recipe's
+`nbhd` does not match the running C core's neighborhood — this guards against
+silently loading a 32‑gene VN recipe into the 512‑gene Moore runtime. Older
+v1 recipes (pre‑Moore) will be rejected; regenerate them with a current build.
 
 For byte‑identical reproducibility, set a seed before `state(...)`:
 

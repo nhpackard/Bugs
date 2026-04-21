@@ -9,17 +9,18 @@
  * Agents live on an N×N periodic grid with a float food field F(x) ∈ [0, 1].
  * Each bug carries a lookup table of 512 movement genes indexed by a 9-bit
  * neighborhood pattern (3×3 Moore neighborhood, visual reading order
- * with y increasing upward):
+ * with y increasing upward). The perception bit for position p compares
+ * F(neighbor_p) against the bug's own egenome[p] threshold:
  *
- *     bit 0 : F(x-1, y+1) > food_threshold   (NW)
- *     bit 1 : F(x,   y+1) > food_threshold   (N)
- *     bit 2 : F(x+1, y+1) > food_threshold   (NE)
- *     bit 3 : F(x-1, y  ) > food_threshold   (W)
- *     bit 4 : F(x,   y  ) > food_threshold   (C / self)
- *     bit 5 : F(x+1, y  ) > food_threshold   (E)
- *     bit 6 : F(x-1, y-1) > food_threshold   (SW)
- *     bit 7 : F(x,   y-1) > food_threshold   (S)
- *     bit 8 : F(x+1, y-1) > food_threshold   (SE)
+ *     bit 0 : F(x-1, y+1) > egenome[NW]
+ *     bit 1 : F(x,   y+1) > egenome[N]
+ *     bit 2 : F(x+1, y+1) > egenome[NE]
+ *     bit 3 : F(x-1, y  ) > egenome[W]
+ *     bit 4 : F(x,   y  ) > egenome[C]     (C / self)
+ *     bit 5 : F(x+1, y  ) > egenome[E]
+ *     bit 6 : F(x-1, y-1) > egenome[SW]
+ *     bit 7 : F(x,   y-1) > egenome[S]
+ *     bit 8 : F(x+1, y-1) > egenome[SE]
  *
  * Each gene encodes one of 120 moves: 8 directions × 15 magnitudes (1..15).
  * Stored as (int8_t dx, int8_t dy, uint8_t mag, uint8_t dir) per slot.
@@ -31,6 +32,7 @@
 #define N_GENES      512   /* 2^9, one per 9-bit Moore neighborhood pattern */
 #define MAG_MAX       15
 #define N_DIRS         8
+#define EGENOME_N      9   /* per-position food thresholds: [NW, N, NE, W, C, E, SW, S, SE] */
 
 /* ── Lifecycle ─────────────────────────────────────────────────────── */
 
@@ -46,10 +48,16 @@ void bugs_set_movement_cost(float c);        /* ≥0: food lost per tick */
 void bugs_set_eat_amount(float a);           /* ≥0: max food eaten per tick */
 void bugs_set_initial_food(float f);         /* initial bug food */
 void bugs_set_food_inc(float i);             /* F(x) regenerates toward source */
-void bugs_set_food_threshold(float t);       /* F(x) > t → gene bit = 1 */
+void bugs_set_mu_egenome(float s);           /* ≥0: truncated-Gaussian σ for per-entry egenome drift at birth */
 void bugs_set_gdiff(int d);                  /* diffusion passes per tick */
 void bugs_set_move_range(int r);             /* 1..MAG_MAX: caps random_gene magnitude.
                                               * 1 = Moore-neighbor moves only, MAG_MAX = full 8×15 space. */
+
+/* Set the egenome initialization vector (length EGENOME_N, order
+ * [NW, N, NE, W, C, E, SW, S, SE]). Each entry clipped to [0, 1].
+ * New bugs seeded via bugs_seed_with_density copy this vector. */
+void bugs_set_egenome_init(const float *v);
+void bugs_get_egenome_init(float *out);      /* writes EGENOME_N floats */
 
 float bugs_get_mutation_rate(void);
 float bugs_get_reproduction_food(void);
@@ -57,7 +65,7 @@ float bugs_get_movement_cost(void);
 float bugs_get_eat_amount(void);
 float bugs_get_initial_food(void);
 float bugs_get_food_inc(void);
-float bugs_get_food_threshold(void);
+float bugs_get_mu_egenome(void);
 int   bugs_get_gdiff(void);
 int   bugs_get_move_range(void);
 
@@ -93,6 +101,14 @@ float    bugs_get_food_env(void);       /* Σ F(x) over grid */
 float   *bugs_get_food_field(void);     /* [N*N] live F(x) */
 float   *bugs_get_food_source(void);    /* [N*N] regen target */
 uint8_t *bugs_get_bug_mask(void);       /* [N*N] 1 if a bug is on that cell */
+
+/* ── Egenome population stats ──────────────────────────────────────────
+ *
+ * Writes per-position mean and standard deviation (EGENOME_N entries each)
+ * of the egenome over all live bugs. Order matches EGENOME_N indexing:
+ * [NW, N, NE, W, C, E, SW, S, SE]. Either output pointer may be NULL.
+ * Zero-filled when population is empty. */
+void bugs_egenome_stats(float *mean_out, float *std_out);
 
 /* ── Colorize ──────────────────────────────────────────────────────── */
 

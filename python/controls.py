@@ -58,9 +58,14 @@ _AVAILABLE_PROBES = {
     'Gq-activity': 'Gq-activity: G-activity deciles',
     'g-activity':  'g-activity: per (nbhd, move) LUT-slot strip chart',
     'gq-activity': 'gq-activity: g-activity deciles',
+    'egenome':     'Egenome: 9 translucent position bands (mean ± std)',
     'ts':          'Scalar time-series (population, total food-in-bugs)',
     'coloring':    'Bug-coloring: per-LUT-index move distribution (3x3 template)',
 }
+
+# Egenome probe: 9 position bands, each with a (mean, std) pair stored
+# as two PROBE_W-long float32 traces. Palette lives in sdl_worker.
+_EG_N_POS = 9
 
 # Bit labels for the 3x3 Moore-neighborhood template, in reading order
 # (top→bottom, left→right). Bit i corresponds to _COLORING_LABELS[i].
@@ -208,6 +213,37 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
             off += PROBE_W * 4
         gq_activity_col = np.zeros(QA_N_DECILES, dtype=np.float32)
 
+    # ── Egenome probe setup ─────────────────────────────────────────
+    # shm layout: 4 B cursor + 9 mean traces (float32, PROBE_W each)
+    #                        + 9 std  traces (float32, PROBE_W each)
+    egenome_enabled      = bool((probes or {}).get('egenome'))
+    egenome_shm          = None
+    egenome_cursor       = None
+    egenome_means        = None   # list of 9 np.ndarray (float32, PROBE_W)
+    egenome_stds         = None
+
+    if egenome_enabled:
+        eg_shm_size = 4 + 2 * _EG_N_POS * PROBE_W * 4
+        egenome_shm = SharedMemory(create=True, size=eg_shm_size)
+        _egbuf = np.ndarray((eg_shm_size,), dtype=np.uint8,
+                            buffer=egenome_shm.buf)
+        _egbuf[:] = 0
+        egenome_cursor = np.ndarray((1,), dtype=np.int32,
+                                    buffer=egenome_shm.buf)
+        egenome_means = []
+        egenome_stds  = []
+        off = 4
+        for _ in range(_EG_N_POS):
+            egenome_means.append(
+                np.ndarray((PROBE_W,), dtype=np.float32,
+                           buffer=egenome_shm.buf, offset=off))
+            off += PROBE_W * 4
+        for _ in range(_EG_N_POS):
+            egenome_stds.append(
+                np.ndarray((PROBE_W,), dtype=np.float32,
+                           buffer=egenome_shm.buf, offset=off))
+            off += PROBE_W * 4
+
     # ── Time-series (ts) probe setup ────────────────────────────────
     ts_enabled     = bool((probes or {}).get('ts'))
     ts_shm         = None
@@ -258,6 +294,8 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
         cmd += ["--g-activity=" + g_activity_shm.name]
     if gq_activity_enabled:
         cmd += ["--gq-activity=" + gq_activity_shm.name]
+    if egenome_enabled:
+        cmd += ["--egenome=" + egenome_shm.name]
     if ts_enabled:
         cmd += ["--ts=" + ts_shm.name]
     if coloring_enabled:
@@ -297,6 +335,8 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
             all_shm.append(g_activity_shm)
         if gq_activity_shm is not None:
             all_shm.append(gq_activity_shm)
+        if egenome_shm is not None:
+            all_shm.append(egenome_shm)
         if ts_shm is not None:
             all_shm.append(ts_shm)
         if coloring_shm is not None:
@@ -364,9 +404,9 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
     sl_food_inc = widgets.FloatSlider(
         value=sim.food_inc, min=0.0, max=0.2, step=0.001,
         description="food_inc:", readout_format=".3f", **sl_kw)
-    sl_food_threshold = widgets.FloatSlider(
-        value=sim.food_threshold, min=0.0, max=1.0, step=0.01,
-        description="food_threshold:", readout_format=".2f", **sl_kw)
+    sl_mu_egenome = widgets.FloatSlider(
+        value=sim.mu_egenome, min=0.0, max=0.1, step=0.001,
+        description="mu_egenome:", readout_format=".3f", **sl_kw)
     sl_gdiff = widgets.IntSlider(
         value=sim.gdiff, min=0, max=10, step=1,
         description="gdiff:",
@@ -452,7 +492,7 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
                       txt_descriptor, btn_export]),
         sl_mutation_rate, sl_reproduction_food,
         sl_movement_cost, sl_eat_amount, sl_initial_food,
-        sl_food_inc, sl_food_threshold, sl_gdiff, sl_move_range,
+        sl_food_inc, sl_mu_egenome, sl_gdiff, sl_move_range,
     ]
     if _ymax_btns:
         _rows.append(widgets.HBox(_ymax_btns))
@@ -510,6 +550,13 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
             for di in range(QA_N_DECILES):
                 gq_activity_deciles[di][cur] = gq_activity_col[di]
             gq_activity_cursor[0] = (cur + 1) % PROBE_W
+        if egenome_enabled:
+            mean, std = sim.egenome_stats()
+            cur = int(egenome_cursor[0])
+            for pi in range(_EG_N_POS):
+                egenome_means[pi][cur] = mean[pi]
+                egenome_stds [pi][cur] = std [pi]
+            egenome_cursor[0] = (cur + 1) % PROBE_W
         if ts_enabled:
             ts_cur = int(ts_cursor[0])
             ts_traces[0][ts_cur] = float(sim.get_population())
@@ -572,6 +619,25 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
         if gq_activity_enabled:
             _save_deciles("gq_activity", gq_activity_cursor, gq_activity_deciles)
             saved += 1
+        if egenome_enabled:
+            cur = int(egenome_cursor[0])
+            t   = np.arange(PROBE_W)
+            pos_labels = ['NW', 'N', 'NE', 'W', 'C', 'E', 'SW', 'S', 'SE']
+            fig, ax = plt.subplots(figsize=(8, 3))
+            for pi in range(_EG_N_POS):
+                m = np.roll(egenome_means[pi], -cur)
+                s = np.roll(egenome_stds [pi], -cur)
+                line, = ax.plot(t, m, linewidth=0.9, label=pos_labels[pi])
+                ax.fill_between(t, m - s, m + s, color=line.get_color(),
+                                alpha=0.15, linewidth=0)
+            ax.set_ylim(0.0, 1.0)
+            ax.set_title("egenome per-position mean ± std")
+            ax.set_xlabel("t (relative)")
+            ax.legend(ncol=3, fontsize=7)
+            fig.tight_layout()
+            fig.savefig("probe_egenome.png", dpi=150)
+            plt.close(fig)
+            saved += 1
         if ts_enabled:
             cur = int(ts_cursor[0])
             t   = np.arange(PROBE_W)
@@ -627,6 +693,11 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
             gq_activity_cursor[0] = 0
             for di in range(QA_N_DECILES):
                 gq_activity_deciles[di][:] = 0
+        if egenome_enabled:
+            egenome_cursor[0] = 0
+            for pi in range(_EG_N_POS):
+                egenome_means[pi][:] = 0
+                egenome_stds [pi][:] = 0
         if ts_enabled:
             ts_cursor[0] = 0
             for ti in range(_TS_N):
@@ -677,7 +748,7 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
     _make_slider_cb("eat_amount",        sl_eat_amount)
     _make_slider_cb("initial_food",      sl_initial_food)
     _make_slider_cb("food_inc",          sl_food_inc)
-    _make_slider_cb("food_threshold",    sl_food_threshold)
+    _make_slider_cb("mu_egenome",        sl_mu_egenome)
     _make_slider_cb("gdiff",             sl_gdiff)
     _make_slider_cb("move_range",        sl_move_range)
 

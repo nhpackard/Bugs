@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <math.h>
 
 /* ── xorshift64* PRNG ──────────────────────────────────────────────── */
 
@@ -22,6 +23,15 @@ static inline uint32_t rng_u32(void)    { return (uint32_t)rng_next64(); }
 static inline float    rng_uniform(void) /* [0, 1) */
     { return (float)(rng_u32() & 0x00FFFFFFu) * (1.0f / (float)(1u << 24)); }
 static inline int      rng_int(int n)    { return (int)(rng_u32() % (uint32_t)n); }
+
+/* Standard normal N(0,1) via Box-Muller. Second variate discarded. */
+static inline float rng_gauss(void)
+{
+    float u1 = rng_uniform();
+    float u2 = rng_uniform();
+    if (u1 < 1e-7f) u1 = 1e-7f;
+    return sqrtf(-2.0f * logf(u1)) * cosf(2.0f * (float)M_PI * u2);
+}
 
 void bugs_set_seed(uint64_t s)
 {
@@ -45,11 +55,12 @@ typedef struct {
 
 typedef struct {
     genome_t genome;
+    float    egenome[EGENOME_N]; /* per-position food thresholds (bug's perception) */
     float    food;
     int32_t  age;
     int32_t  x;
     int32_t  y;
-    uint32_t genome_hash;  /* FNV-1a over genome bytes */
+    uint32_t genome_hash;  /* FNV-1a over genome bytes (does not include egenome) */
     uint8_t  alive;
     uint8_t  born_this_step;
 } bug_t;
@@ -66,9 +77,19 @@ static float g_movement_cost    = 0.5f;   /* positive: food lost per tick */
 static float g_eat_amount       = 2.0f;
 static float g_initial_food     = 10.0f;
 static float g_food_inc         = 0.01f;
-static float g_food_threshold   = 0.1f;
 static int   g_gdiff            = 0;
 static int   g_move_range       = MAG_MAX;  /* 1..MAG_MAX; caps random_gene magnitude */
+static float g_mu_egenome       = 0.0f;     /* σ of per-entry Gaussian mutation on birth */
+
+/* Per-position food-threshold vector used to initialize a new bug's
+ * egenome on seeding (bugs_seed_with_density). Positions NW..SE in
+ * reading order: [0..8]. Defaults to 0.1 on all nine entries, matching
+ * the previous scalar food_threshold=0.1. */
+static float g_egenome_init[EGENOME_N] = {
+    0.1f, 0.1f, 0.1f,
+    0.1f, 0.1f, 0.1f,
+    0.1f, 0.1f, 0.1f,
+};
 
 /* lattice fields */
 static float   *F_food   = NULL;   /* [N*N] live food */
@@ -171,6 +192,19 @@ static void genome_mutate_copy(const genome_t *src, genome_t *dst, float r)
     }
 }
 
+/* Per-position copy with truncated-Gaussian drift (σ = sigma), clipped to
+ * [0, 1]. When sigma == 0 this degenerates to a plain copy. */
+static void egenome_mutate_copy(const float *src, float *dst, float sigma)
+{
+    for (int i = 0; i < EGENOME_N; i++) {
+        float v = src[i];
+        if (sigma > 0.0f) v += sigma * rng_gauss();
+        if (v < 0.0f) v = 0.0f;
+        if (v > 1.0f) v = 1.0f;
+        dst[i] = v;
+    }
+}
+
 /* FNV-1a over the genome byte sequence (N_GENES * 4 = 128 bytes). */
 static uint32_t genome_hash_fn(const genome_t *g)
 {
@@ -252,8 +286,23 @@ void bugs_set_movement_cost(float c)     { g_movement_cost    = c; }
 void bugs_set_eat_amount(float a)        { g_eat_amount       = a; }
 void bugs_set_initial_food(float f)      { g_initial_food     = f; }
 void bugs_set_food_inc(float i)          { g_food_inc         = i; }
-void bugs_set_food_threshold(float t)    { g_food_threshold   = t; }
 void bugs_set_gdiff(int d)               { g_gdiff            = d; }
+void bugs_set_mu_egenome(float s)        { g_mu_egenome       = s < 0.0f ? 0.0f : s; }
+
+void bugs_set_egenome_init(const float *v)
+{
+    for (int i = 0; i < EGENOME_N; i++) {
+        float x = v[i];
+        if (x < 0.0f) x = 0.0f;
+        if (x > 1.0f) x = 1.0f;
+        g_egenome_init[i] = x;
+    }
+}
+
+void bugs_get_egenome_init(float *out)
+{
+    for (int i = 0; i < EGENOME_N; i++) out[i] = g_egenome_init[i];
+}
 void bugs_set_move_range(int r)
 {
     if (r < 1)        r = 1;
@@ -267,9 +316,9 @@ float bugs_get_movement_cost(void)     { return g_movement_cost; }
 float bugs_get_eat_amount(void)        { return g_eat_amount; }
 float bugs_get_initial_food(void)      { return g_initial_food; }
 float bugs_get_food_inc(void)          { return g_food_inc; }
-float bugs_get_food_threshold(void)    { return g_food_threshold; }
 int   bugs_get_gdiff(void)             { return g_gdiff; }
 int   bugs_get_move_range(void)        { return g_move_range; }
+float bugs_get_mu_egenome(void)        { return g_mu_egenome; }
 
 /* ── Food field setup ──────────────────────────────────────────────── */
 
@@ -359,6 +408,8 @@ void bugs_seed_with_density(float density)
                 b->born_this_step = 0;
                 genome_random(&b->genome);
                 b->genome_hash = genome_hash_fn(&b->genome);
+                for (int k = 0; k < EGENOME_N; k++)
+                    b->egenome[k] = g_egenome_init[k];
                 place_or_bump(bid, x, y);
                 if (bug_pool[bid].alive) {
                     alive_ids[n_alive++] = bid;
@@ -392,19 +443,22 @@ static void diffuse_once(void)
 
 /* ── Neighborhood → 9-bit gene index (Moore) ───────────────────────── */
 
-static inline int neighborhood_gene(int x, int y)
+/* Per-bug: each of the 9 bits is thresholded by that bug's own egenome[p]
+ * (bit p corresponds to Moore position p in reading order NW..SE). */
+static inline int neighborhood_gene(const bug_t *b)
 {
-    float t = g_food_threshold;
+    int x = b->x, y = b->y;
+    const float *e = b->egenome;
     int g = 0;
-    if (F_food[gidx(x-1, y+1)] > t) g |=   1;  /* NW  */
-    if (F_food[gidx(x,   y+1)] > t) g |=   2;  /* N   */
-    if (F_food[gidx(x+1, y+1)] > t) g |=   4;  /* NE  */
-    if (F_food[gidx(x-1, y  )] > t) g |=   8;  /* W   */
-    if (F_food[gidx(x,   y  )] > t) g |=  16;  /* C   */
-    if (F_food[gidx(x+1, y  )] > t) g |=  32;  /* E   */
-    if (F_food[gidx(x-1, y-1)] > t) g |=  64;  /* SW  */
-    if (F_food[gidx(x,   y-1)] > t) g |= 128;  /* S   */
-    if (F_food[gidx(x+1, y-1)] > t) g |= 256;  /* SE  */
+    if (F_food[gidx(x-1, y+1)] > e[0]) g |=   1;  /* NW  */
+    if (F_food[gidx(x,   y+1)] > e[1]) g |=   2;  /* N   */
+    if (F_food[gidx(x+1, y+1)] > e[2]) g |=   4;  /* NE  */
+    if (F_food[gidx(x-1, y  )] > e[3]) g |=   8;  /* W   */
+    if (F_food[gidx(x,   y  )] > e[4]) g |=  16;  /* C   */
+    if (F_food[gidx(x+1, y  )] > e[5]) g |=  32;  /* E   */
+    if (F_food[gidx(x-1, y-1)] > e[6]) g |=  64;  /* SW  */
+    if (F_food[gidx(x,   y-1)] > e[7]) g |= 128;  /* S   */
+    if (F_food[gidx(x+1, y-1)] > e[8]) g |= 256;  /* SE  */
     return g;
 }
 
@@ -768,7 +822,7 @@ void bugs_g_activity_update(void)
 
     for (int i = 0; i < n_alive; i++) {
         bug_t *b = &bug_pool[alive_ids[i]];
-        int nbhd = neighborhood_gene(b->x, b->y);
+        int nbhd = neighborhood_gene(b);
         gene_t  g = b->genome.genes[nbhd];
         uint32_t key = g_pair_key(nbhd, g.dx, g.dy);
         act_entry_t *e = gact_find_or_insert(key, hash_to_color(mix32(key)));
@@ -941,6 +995,7 @@ void bugs_step(void)
             c->food  = half;
             c->born_this_step = 1;
             genome_mutate_copy(&b->genome, &c->genome, g_mutation_rate);
+            egenome_mutate_copy(b->egenome, c->egenome, g_mu_egenome);
             c->genome_hash = genome_hash_fn(&c->genome);
             place_or_bump(cid, b->x, b->y);
             if (bug_pool[cid].alive) {
@@ -972,7 +1027,7 @@ void bugs_step(void)
         b->age++;
 
         /* Look up move */
-        int gi = neighborhood_gene(b->x, b->y);
+        int gi = neighborhood_gene(b);
         gene_t mv = b->genome.genes[gi];
 
         /* Move bug */
@@ -1015,6 +1070,38 @@ float    bugs_get_food_env(void)
 float   *bugs_get_food_field(void)  { return F_food; }
 float   *bugs_get_food_source(void) { return F_src; }
 uint8_t *bugs_get_bug_mask(void)    { return bug_mask; }
+
+/* Population mean and std-dev of each egenome entry (9 positions).
+ * mean_out[9] and std_out[9] are overwritten; both filled with zeros
+ * when the population is empty. Either pointer may be NULL. */
+void bugs_egenome_stats(float *mean_out, float *std_out)
+{
+    float mean[EGENOME_N];
+    float var [EGENOME_N];
+    for (int p = 0; p < EGENOME_N; p++) { mean[p] = 0.0f; var[p] = 0.0f; }
+
+    if (n_alive > 0) {
+        double sum[EGENOME_N] = {0};
+        double sqr[EGENOME_N] = {0};
+        for (int i = 0; i < n_alive; i++) {
+            const float *e = bug_pool[alive_ids[i]].egenome;
+            for (int p = 0; p < EGENOME_N; p++) {
+                sum[p] += e[p];
+                sqr[p] += (double)e[p] * (double)e[p];
+            }
+        }
+        double inv = 1.0 / (double)n_alive;
+        for (int p = 0; p < EGENOME_N; p++) {
+            double m = sum[p] * inv;
+            double v = sqr[p] * inv - m * m;
+            if (v < 0.0) v = 0.0;
+            mean[p] = (float)m;
+            var[p]  = (float)v;
+        }
+    }
+    if (mean_out) for (int p = 0; p < EGENOME_N; p++) mean_out[p] = mean[p];
+    if (std_out)  for (int p = 0; p < EGENOME_N; p++) std_out[p]  = sqrtf(var[p]);
+}
 
 /* ── Colorize ──────────────────────────────────────────────────────── */
 

@@ -61,6 +61,22 @@ _TS_COLORS = [
 ]
 _TS_LABELS = ['pop', 'food_bug']
 
+# Egenome 9-position palette, order [NW, N, NE, W, C, E, SW, S, SE].
+# Packed (R, G, B) with alpha applied at blend time.
+_EG_RGB = (
+    (0xFF, 0x44, 0x44),  # NW red
+    (0xFF, 0x99, 0x44),  # N  orange
+    (0xFF, 0xDD, 0x44),  # NE yellow
+    (0xAA, 0xFF, 0x44),  # W  lime
+    (0x44, 0xFF, 0x88),  # C  green
+    (0x44, 0xDD, 0xFF),  # E  cyan
+    (0x44, 0x88, 0xFF),  # SW blue
+    (0xAA, 0x44, 0xFF),  # S  violet
+    (0xFF, 0x44, 0xDD),  # SE magenta
+)
+_EG_N_POS = 9
+_EG_LABELS = ('NW', 'N', 'NE', 'W', 'C', 'E', 'SW', 'S', 'SE')
+
 
 def _render_q_activity(dst, decile_bufs, cursor, global_max):
     """Render activity quantile strip chart with log-scaled Y axis.
@@ -212,6 +228,92 @@ def _render_ts(dst, trace_bufs, cursor, global_max):
     return global_max
 
 
+def _render_egenome(dst, means, stds, cursor):
+    """Render the egenome probe: 9 translucent position bands over linear
+    Y axis in [0, 1]. For each position p, a filled band extends from
+    mean[p]-std[p] to mean[p]+std[p], with a solid centerline at mean[p].
+    Bands are blended additively so overlaps lighten.
+
+    means, stds : list of 9 float32[PROBE_W] arrays.
+    """
+    import numpy as np
+
+    # Background
+    dst[:PROBE_H, :PROBE_W] = BG_COLOR
+
+    # Unpack BG once so we can blend against it cleanly.
+    bg = int(BG_COLOR) & 0xFFFFFFFF
+    br = (bg >> 16) & 0xFF
+    bg_g = (bg >> 8) & 0xFF
+    bb = bg & 0xFF
+
+    # Float workspace so we can blend, then convert back to int32 ARGB.
+    work_r = np.full((PROBE_H, PROBE_W), br, dtype=np.float32)
+    work_g = np.full((PROBE_H, PROBE_W), bg_g, dtype=np.float32)
+    work_b = np.full((PROBE_H, PROBE_W), bb, dtype=np.float32)
+
+    xs = np.arange(PROBE_W, dtype=np.int32)
+    band_alpha = 0.30   # translucent band
+    line_alpha = 1.00   # opaque centerline
+
+    for p in range(_EG_N_POS):
+        m = np.roll(means[p], -cursor)
+        s = np.roll(stds [p], -cursor)
+
+        # Ignore columns with no data yet (mean==0 and std==0 on init-reset).
+        valid = (m > 0) | (s > 0)
+        if not valid.any():
+            continue
+
+        cr, cg, cb = _EG_RGB[p]
+
+        # Clip to [0, 1] before mapping to pixel rows.
+        m_c = np.clip(m, 0.0, 1.0)
+        s_c = np.clip(s, 0.0, 1.0)
+        top = np.clip(m_c + s_c, 0.0, 1.0)
+        bot = np.clip(m_c - s_c, 0.0, 1.0)
+
+        # Convert to row coordinates: y=0 is top (value=1), y=H-1 is bottom (value=0).
+        y_top = ((1.0 - top) * (PROBE_H - 1)).astype(np.int32)
+        y_bot = ((1.0 - bot) * (PROBE_H - 1)).astype(np.int32)
+        y_mid = ((1.0 - m_c) * (PROBE_H - 1)).astype(np.int32)
+
+        # Band fill: for each valid column, blend α into rows [y_top, y_bot].
+        cols = np.where(valid)[0]
+        for x in cols:
+            y0 = int(y_top[x])
+            y1 = int(y_bot[x])
+            if y0 > y1:
+                y0, y1 = y1, y0
+            work_r[y0:y1 + 1, x] = work_r[y0:y1 + 1, x] * (1 - band_alpha) + cr * band_alpha
+            work_g[y0:y1 + 1, x] = work_g[y0:y1 + 1, x] * (1 - band_alpha) + cg * band_alpha
+            work_b[y0:y1 + 1, x] = work_b[y0:y1 + 1, x] * (1 - band_alpha) + cb * band_alpha
+
+        # Centerline.
+        ys = np.clip(y_mid[valid], 0, PROBE_H - 1)
+        work_r[ys, xs[valid]] = work_r[ys, xs[valid]] * (1 - line_alpha) + cr * line_alpha
+        work_g[ys, xs[valid]] = work_g[ys, xs[valid]] * (1 - line_alpha) + cg * line_alpha
+        work_b[ys, xs[valid]] = work_b[ys, xs[valid]] * (1 - line_alpha) + cb * line_alpha
+
+    # Gridlines at y = 0.25, 0.50, 0.75 for readability
+    for v in (0.25, 0.5, 0.75):
+        y = int((1.0 - v) * (PROBE_H - 1))
+        work_r[y, :] = np.clip(work_r[y, :] + 20, 0, 255)
+        work_g[y, :] = np.clip(work_g[y, :] + 20, 0, 255)
+        work_b[y, :] = np.clip(work_b[y, :] + 20, 0, 255)
+
+    # Pack to ARGB int32
+    r = np.clip(work_r, 0, 255).astype(np.uint32)
+    g = np.clip(work_g, 0, 255).astype(np.uint32)
+    b = np.clip(work_b, 0, 255).astype(np.uint32)
+    argb = (0xFF000000 | (r << 16) | (g << 8) | b).astype(np.int64)
+    argb = np.where(argb < 0x80000000, argb, argb - 0x100000000).astype(np.int32)
+    dst[:PROBE_H, :PROBE_W] = argb
+
+    # Cursor marker
+    dst[:PROBE_H, PROBE_W - 1] = CURSOR_COLOR
+
+
 def main():
     if len(sys.argv) < 5:
         print("Bugs SDL: bad args", flush=True)
@@ -227,6 +329,7 @@ def main():
     Gq_activity_shm_name = None
     g_activity_shm_name  = None
     gq_activity_shm_name = None
+    egenome_shm_name     = None
     ts_shm_name          = None
     coloring_shm_name    = None
     for arg in sys.argv[5:]:
@@ -238,6 +341,8 @@ def main():
             g_activity_shm_name = arg[len("--g-activity="):]
         elif arg.startswith("--gq-activity="):
             gq_activity_shm_name = arg[len("--gq-activity="):]
+        elif arg.startswith("--egenome="):
+            egenome_shm_name = arg[len("--egenome="):]
         elif arg.startswith("--ts="):
             ts_shm_name = arg[len("--ts="):]
         elif arg.startswith("--coloring="):
@@ -250,6 +355,7 @@ def main():
           f"Gq-activity={bool(Gq_activity_shm_name)}  "
           f"g-activity={bool(g_activity_shm_name)}  "
           f"gq-activity={bool(gq_activity_shm_name)}  "
+          f"egenome={bool(egenome_shm_name)}  "
           f"ts={bool(ts_shm_name)}  "
           f"coloring={bool(coloring_shm_name)}", flush=True)
 
@@ -336,6 +442,37 @@ def main():
         gq_activity_shm, gq_activity_cursor, gq_activity_deciles = \
             _open_deciles_shm(gq_activity_shm_name, "gq-activity", QA_N_DECILES)
         if gq_activity_shm is None: gq_activity_shm_name = None
+
+    # ── Egenome shared memory (9 means + 9 stds) ─────────────────
+    egenome_shm     = None
+    egenome_cursor  = None
+    egenome_means   = None
+    egenome_stds    = None
+    if egenome_shm_name:
+        try:
+            egenome_shm = SharedMemory(name=egenome_shm_name)
+            egenome_cursor = np.ndarray((1,), dtype=np.int32,
+                                        buffer=egenome_shm.buf)
+            egenome_means = []
+            egenome_stds  = []
+            off = 4
+            for _ in range(_EG_N_POS):
+                egenome_means.append(
+                    np.ndarray((PROBE_W,), dtype=np.float32,
+                               buffer=egenome_shm.buf, offset=off))
+                off += PROBE_W * 4
+            for _ in range(_EG_N_POS):
+                egenome_stds.append(
+                    np.ndarray((PROBE_W,), dtype=np.float32,
+                               buffer=egenome_shm.buf, offset=off))
+                off += PROBE_W * 4
+            print(f"Bugs SDL: egenome shm opened ({_EG_N_POS}x{PROBE_W} means+stds)",
+                  flush=True)
+        except Exception as e:
+            print(f"Bugs SDL: egenome SharedMemory open failed: {e}",
+                  flush=True)
+            egenome_shm_name = None
+            egenome_shm = None
 
     # ── coloring shared memory ───────────────────────────────────
     coloring_shm    = None
@@ -493,6 +630,13 @@ def main():
         gq_win_p, gq_surf_p, gq_dst, next_probe_y = _create_probe_window(
             b"gq-activity", PROBE_W, PROBE_H, "gq-activity")
 
+    # ── egenome window ───────────────────────────────────────────
+    eg_win_p = eg_surf_p = eg_dst = None
+    if egenome_shm is not None:
+        eg_win_p, eg_surf_p, eg_dst, next_probe_y = _create_probe_window(
+            b"egenome (mean +/- std, 9 positions)",
+            PROBE_W, PROBE_H, "egenome")
+
     # ── ts window ────────────────────────────────────────────────
     ts_window_p = ts_surface_p = ts_dst = None
     ts_global_max = 0.0
@@ -572,6 +716,14 @@ def main():
             sdl2.SDL_UnlockSurface(gq_surf_p)
             sdl2.SDL_UpdateWindowSurface(gq_win_p)
 
+        # egenome window
+        if eg_win_p is not None and egenome_means is not None:
+            sdl2.SDL_LockSurface(eg_surf_p)
+            cur_eg = int(egenome_cursor[0])
+            _render_egenome(eg_dst, egenome_means, egenome_stds, cur_eg)
+            sdl2.SDL_UnlockSurface(eg_surf_p)
+            sdl2.SDL_UpdateWindowSurface(eg_win_p)
+
         # ts (time-series) window
         if ts_window_p is not None and ts_traces is not None:
             sdl2.SDL_LockSurface(ts_surface_p)
@@ -606,6 +758,8 @@ def main():
         sdl2.SDL_DestroyWindow(col_window_p)
     if ts_window_p is not None:
         sdl2.SDL_DestroyWindow(ts_window_p)
+    if eg_win_p is not None:
+        sdl2.SDL_DestroyWindow(eg_win_p)
     if gq_win_p is not None:
         sdl2.SDL_DestroyWindow(gq_win_p)
     if Gq_win_p is not None:
@@ -626,6 +780,8 @@ def main():
         Gq_activity_shm.close()
     if gq_activity_shm is not None:
         gq_activity_shm.close()
+    if egenome_shm is not None:
+        egenome_shm.close()
     if ts_shm is not None:
         ts_shm.close()
     if coloring_shm is not None:

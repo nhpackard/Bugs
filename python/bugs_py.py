@@ -5,19 +5,24 @@ Bugs model (Packard Bugs, Bedau & Packard 1991)
 ----------------------------------------------
 Agents live on an N×N periodic grid with a float food field F(x) ∈ [0, 1].
 Each bug carries 512 movement genes indexed by a 9-bit neighborhood
-pattern (3×3 Moore neighborhood, visual reading order, y increases upward):
+pattern (3×3 Moore neighborhood, visual reading order, y increases upward)
+and a 9-entry *egenome* of per-position food thresholds θ_p:
 
-    bit 0 : F(x-1, y+1) > food_threshold    (NW)
-    bit 1 : F(x,   y+1) > food_threshold    (N)
-    bit 2 : F(x+1, y+1) > food_threshold    (NE)
-    bit 3 : F(x-1, y  ) > food_threshold    (W)
-    bit 4 : F(x,   y  ) > food_threshold    (C / self)
-    bit 5 : F(x+1, y  ) > food_threshold    (E)
-    bit 6 : F(x-1, y-1) > food_threshold    (SW)
-    bit 7 : F(x,   y-1) > food_threshold    (S)
-    bit 8 : F(x+1, y-1) > food_threshold    (SE)
+    bit 0 : F(x-1, y+1) > θ_NW    (NW)
+    bit 1 : F(x,   y+1) > θ_N     (N)
+    bit 2 : F(x+1, y+1) > θ_NE    (NE)
+    bit 3 : F(x-1, y  ) > θ_W     (W)
+    bit 4 : F(x,   y  ) > θ_C     (C / self)
+    bit 5 : F(x+1, y  ) > θ_E     (E)
+    bit 6 : F(x-1, y-1) > θ_SW    (SW)
+    bit 7 : F(x,   y-1) > θ_S     (S)
+    bit 8 : F(x+1, y-1) > θ_SE    (SE)
 
 Each gene encodes one of 120 moves: 8 directions × 15 magnitudes.
+At birth, the child's egenome is the parent's with per-entry Gaussian
+drift of width `mu_egenome` (clipped to [0, 1]). The egenome init vector
+is API-only; typical starting regimes via the helpers
+`egenome_center_only`, `egenome_constant`, `egenome_random`.
 """
 
 import ctypes
@@ -31,6 +36,32 @@ NBHD_BITS  = 9
 N_GENES    = 1 << NBHD_BITS   # 512 entries, one per 9-bit Moore pattern
 MAG_MAX    = 15
 N_DIRS     = 8
+EGENOME_N  = 9   # one food_threshold per Moore-neighborhood position
+
+
+def egenome_center_only(value=0.5):
+    """Egenome with only the center (C / self) entry set.
+
+    The bug can only perceive its own cell. Useful as the "minimal
+    perception" baseline."""
+    v = np.zeros(EGENOME_N, dtype=np.float32)
+    v[4] = float(value)                          # center index in [NW,N,NE,W,C,E,SW,S,SE]
+    return v
+
+
+def egenome_constant(value=0.1):
+    """Egenome with the same threshold θ on every position.
+
+    `egenome_constant(0.1)` reproduces the historical scalar
+    food_threshold=0.1 behaviour."""
+    return np.full(EGENOME_N, float(value), dtype=np.float32)
+
+
+def egenome_random(rng=None):
+    """Egenome with each entry drawn i.i.d. uniform from [0, 1]."""
+    if rng is None:
+        rng = np.random.default_rng()
+    return rng.random(EGENOME_N).astype(np.float32)
 
 # Repo root (parent of Bugs/) — PNG templates live under CocoaBugs/
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -88,10 +119,15 @@ class Bugs:
         eat_amount=2.0,
         initial_food=10.0,
         food_inc=0.01,
-        food_threshold=0.1,
+        mu_egenome=0.0,
         gdiff=0,
         move_range=15,
     )
+
+    # Non-scalar metaparam with its own init-time kwarg (see state()).
+    # Kept out of _DEFAULTS because _DEFAULTS drives the scalar
+    # setter/getter loop and auto-generated updaters.
+    _EGENOME_INIT_DEFAULT = np.full(EGENOME_N, 0.1, dtype=np.float32)
 
     def __init__(self, lib_path=None):
         self._lib = ctypes.CDLL(lib_path or _find_lib())
@@ -113,7 +149,7 @@ class Bugs:
         # Metaparam setters/getters
         for name in ("mutation_rate", "reproduction_food", "movement_cost",
                      "eat_amount", "initial_food", "food_inc",
-                     "food_threshold"):
+                     "mu_egenome"):
             sfn = getattr(L, f"bugs_set_{name}")
             gfn = getattr(L, f"bugs_get_{name}")
             sfn.argtypes = [ctypes.c_float]
@@ -128,6 +164,15 @@ class Bugs:
         L.bugs_set_move_range.restype        = None
         L.bugs_get_move_range.argtypes       = []
         L.bugs_get_move_range.restype        = ctypes.c_int
+
+        # Egenome init vector and population stats
+        L.bugs_set_egenome_init.argtypes     = [ctypes.POINTER(ctypes.c_float)]
+        L.bugs_set_egenome_init.restype      = None
+        L.bugs_get_egenome_init.argtypes     = [ctypes.POINTER(ctypes.c_float)]
+        L.bugs_get_egenome_init.restype      = None
+        L.bugs_egenome_stats.argtypes        = [ctypes.POINTER(ctypes.c_float),
+                                                ctypes.POINTER(ctypes.c_float)]
+        L.bugs_egenome_stats.restype         = None
 
         # Food field setup
         L.bugs_set_food_source.argtypes      = [ctypes.POINTER(ctypes.c_float)]
@@ -240,10 +285,14 @@ class Bugs:
             val = kwargs.pop(k, default)
             setattr(self, k, type(default)(val))
             getattr(self._lib, f"bugs_set_{k}")(getattr(self, k))
+        # Non-scalar metaparam: egenome_init (length-9 vector, API-only)
+        egenome_init = kwargs.pop('egenome_init', self._EGENOME_INIT_DEFAULT)
+        self.set_egenome_init(egenome_init)
         if kwargs:
             raise TypeError(f"unknown init kwargs: {sorted(kwargs)}")
         self._state_params = {}
         self._init_metaparams = {k: getattr(self, k) for k in self._DEFAULTS}
+        self._init_metaparams['egenome_init'] = self.get_egenome_init().tolist()
 
     def free(self):
         stop = getattr(self, '_stop_display', None)
@@ -279,7 +328,7 @@ class Bugs:
     update_eat_amount        = _make_updater("eat_amount")
     update_initial_food      = _make_updater("initial_food")
     update_food_inc          = _make_updater("food_inc")
-    update_food_threshold    = _make_updater("food_threshold")
+    update_mu_egenome        = _make_updater("mu_egenome")
     update_gdiff             = _make_updater("gdiff", is_int=True)
     update_move_range        = _make_updater("move_range", is_int=True)
     del _make_updater
@@ -294,16 +343,21 @@ class Bugs:
 
     def params(self):
         """Return current metaparameters as a dict suitable for init(**d)."""
-        return dict(N=self._N, **{k: getattr(self, k) for k in self._DEFAULTS})
+        p = dict(N=self._N, **{k: getattr(self, k) for k in self._DEFAULTS})
+        p['egenome_init'] = self.get_egenome_init().tolist()
+        return p
 
     def params_str(self):
         """Return a copy-pasteable sim.init(...) call with defaults annotated."""
         p = self.params()
+        default_egenome = self._EGENOME_INIT_DEFAULT.tolist()
         lines = ["sim.init("]
         for k, v in p.items():
             val = repr(v)
             if k in self._DEFAULTS and v != self._DEFAULTS[k]:
                 lines.append(f"    {k}={val},   # default: {self._DEFAULTS[k]!r}")
+            elif k == 'egenome_init' and list(v) != default_egenome:
+                lines.append(f"    {k}={val},   # default: {default_egenome!r}")
             else:
                 lines.append(f"    {k}={val},")
         lines.append(")")
@@ -350,9 +404,36 @@ class Bugs:
         self._lib.bugs_seed_with_density(float(d))
         self._state_params['seed_density'] = float(d)
 
+    def set_egenome_init(self, v):
+        """Set the egenome initialization vector (length 9, entries clipped
+        to [0, 1]). Affects bugs created by subsequent seeding only."""
+        arr = np.ascontiguousarray(np.asarray(v, dtype=np.float32).ravel())
+        if arr.size != EGENOME_N:
+            raise ValueError(f"egenome_init must have {EGENOME_N} entries, got {arr.size}")
+        self._lib.bugs_set_egenome_init(
+            arr.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
+        self._egenome_init = arr.copy()
+
+    def get_egenome_init(self):
+        """Return current egenome initialization vector as a (9,) float32."""
+        out = np.zeros(EGENOME_N, dtype=np.float32)
+        self._lib.bugs_get_egenome_init(
+            out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
+        return out
+
+    def egenome_stats(self):
+        """Return (mean, std) of the egenome over live bugs, each (9,) float32.
+        Ordering is [NW, N, NE, W, C, E, SW, S, SE]."""
+        mean = np.zeros(EGENOME_N, dtype=np.float32)
+        std  = np.zeros(EGENOME_N, dtype=np.float32)
+        self._lib.bugs_egenome_stats(
+            mean.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+            std.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
+        return mean, std
+
     def state(self, food_source='uniform', food_source_value=1.0,
               food_source_thresh=0.5, brightness=None,
-              template=None, seed_density=0.1):
+              template=None, seed_density=0.1, egenome_init=None):
         """Initialize food field and bug population from parameters.
 
         food_source:
@@ -363,7 +444,14 @@ class Bugs:
           'template'   — shorthand: load built-in PNG template by name (see
                          Bugs.food_templates()), threshold at food_source_thresh
           'custom'     — use `brightness` directly as F_source (no threshold)
+
+        egenome_init: length-9 vector of per-position food thresholds in
+          [0, 1]; order [NW, N, NE, W, C, E, SW, S, SE]. If None, uses the
+          current C-side value (class default: 0.1 on every position).
+          See helpers egenome_center_only / egenome_constant / egenome_random.
         """
+        if egenome_init is not None:
+            self.set_egenome_init(egenome_init)
         self._state_params = {}
         if food_source == 'template':
             if template is None:
@@ -392,6 +480,10 @@ class Bugs:
             self.set_food_source_uniform(food_source_value)
         self.exterminate()
         self.seed_with_density(seed_density)
+        # Log whatever egenome_init is live on the C side into the recipe
+        # state_params, regardless of whether the caller passed it here or
+        # set it earlier via sim.set_egenome_init().
+        self._state_params['egenome_init'] = self.get_egenome_init().tolist()
 
     # ── Step and colorize ─────────────────────────────────────────────
 
@@ -526,15 +618,17 @@ class Bugs:
         filename = f"{datetime.now().strftime('%Y-%m-%d')}_{safe_desc}.bugs"
         filepath = os.path.join(runs_dir, filename)
 
+        mp_final = {k: getattr(self, k) for k in self._DEFAULTS}
+        mp_final['egenome_init'] = self.get_egenome_init().tolist()
         recipe = {
-            'version': 2,
+            'version': 3,
             'nbhd': NBHD,                     # 'moore' (9-bit) or 'von_neumann' (5-bit)
             'n_genes': N_GENES,
             'created': datetime.now().isoformat(timespec='seconds'),
             'descriptor': descriptor,
             'N': self._N,
             'metaparams_init': dict(self._init_metaparams),
-            'metaparams_final': {k: getattr(self, k) for k in self._DEFAULTS},
+            'metaparams_final': mp_final,
             'initialization': dict(self._state_params),
             'display': {
                 'colormode': colormode,
@@ -599,8 +693,19 @@ def import_run(filepath=None, recipe='final', lib_path=None):
             f"nbhd='{NBHD}' (n_genes={N_GENES}). Recipes are not transferable "
             f"across neighborhood topologies — genome structure differs.")
 
-    mp_init  = data['metaparams_init']
-    mp_final = data['metaparams_final']
+    mp_init  = dict(data['metaparams_init'])
+    mp_final = dict(data['metaparams_final'])
+
+    # Legacy migration: pre-v3 recipes stored a scalar `food_threshold`
+    # rather than a per-position `egenome_init` vector. Translate the
+    # scalar into a constant 9-vector (the historical behaviour) and drop
+    # the old key. mu_egenome defaults to 0.0 (no drift).
+    for mp_dict in (mp_init, mp_final):
+        if 'food_threshold' in mp_dict:
+            ft = float(mp_dict.pop('food_threshold'))
+            mp_dict.setdefault('egenome_init', [ft] * EGENOME_N)
+            mp_dict.setdefault('mu_egenome', 0.0)
+
     mp = mp_init if recipe == 'init' else mp_final
 
     # Show the init→final delta so the user knows which regime they're

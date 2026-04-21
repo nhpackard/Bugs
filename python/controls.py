@@ -54,10 +54,12 @@ PROBE_W = 1024
 PROBE_H = 128
 
 _AVAILABLE_PROBES = {
-    'activity':   'Per-genome activity (scrolling hash-colored strip)',
-    'q_activity': 'Activity quantile profile (decile strip chart)',
-    'ts':         'Scalar time-series (population, total food-in-bugs)',
-    'coloring':   'Bug-coloring: per-LUT-index move distribution (3x3 template)',
+    'G-activity':  'G-activity: whole-genome content-hash strip chart',
+    'Gq-activity': 'Gq-activity: G-activity deciles',
+    'g-activity':  'g-activity: per (nbhd, move) LUT-slot strip chart',
+    'gq-activity': 'gq-activity: g-activity deciles',
+    'ts':          'Scalar time-series (population, total food-in-bugs)',
+    'coloring':    'Bug-coloring: per-LUT-index move distribution (3x3 template)',
 }
 
 # Bit labels for the 3x3 Moore-neighborhood template, in reading order
@@ -118,50 +120,93 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
     ctrl   = np.ndarray((5,),     dtype=np.int32, buffer=ctrl_shm.buf)
     ctrl[:] = [0, colormode, 0, 0, int(paused)]
 
-    # ── Activity probe setup ────────────────────────────────────────
-    activity_enabled = bool((probes or {}).get('activity'))
+    # ── G-activity probe setup (per whole-genome content hash) ──────
+    G_activity_enabled = bool((probes or {}).get('G-activity'))
     ACT_H = 2 * PROBE_H  # 256 px tall
-    activity_shm     = None
-    activity_cursor  = None
-    activity_pixels  = None
-    activity_col     = None
+    G_activity_shm     = None
+    G_activity_cursor  = None
+    G_activity_pixels  = None
+    G_activity_col     = None
 
-    if activity_enabled:
+    if G_activity_enabled:
         act_shm_size = 4 + PROBE_W * ACT_H * 4
-        activity_shm = SharedMemory(create=True, size=act_shm_size)
+        G_activity_shm = SharedMemory(create=True, size=act_shm_size)
         _abuf = np.ndarray((act_shm_size,), dtype=np.uint8,
-                           buffer=activity_shm.buf)
+                           buffer=G_activity_shm.buf)
         _abuf[:] = 0
-        activity_cursor = np.ndarray((1,), dtype=np.int32,
-                                     buffer=activity_shm.buf)
-        activity_pixels = np.ndarray((ACT_H, PROBE_W), dtype=np.int32,
-                                     buffer=activity_shm.buf, offset=4)
-        activity_col = np.zeros(ACT_H, dtype=np.int32)
+        G_activity_cursor = np.ndarray((1,), dtype=np.int32,
+                                       buffer=G_activity_shm.buf)
+        G_activity_pixels = np.ndarray((ACT_H, PROBE_W), dtype=np.int32,
+                                       buffer=G_activity_shm.buf, offset=4)
+        G_activity_col = np.zeros(ACT_H, dtype=np.int32)
 
-    # ── Activity quantile (q_activity) probe setup ──────────────────
-    q_activity_enabled  = bool((probes or {}).get('q_activity'))
-    QA_N_DECILES        = 9
-    q_activity_shm      = None
-    q_activity_cursor   = None
-    q_activity_deciles  = None
-    q_activity_col      = None
+    # ── Gq-activity (deciles of G-activity) probe setup ─────────────
+    Gq_activity_enabled  = bool((probes or {}).get('Gq-activity'))
+    QA_N_DECILES         = 9
+    Gq_activity_shm      = None
+    Gq_activity_cursor   = None
+    Gq_activity_deciles  = None
+    Gq_activity_col      = None
 
-    if q_activity_enabled:
+    if Gq_activity_enabled:
         qa_shm_size = 4 + QA_N_DECILES * PROBE_W * 4
-        q_activity_shm = SharedMemory(create=True, size=qa_shm_size)
+        Gq_activity_shm = SharedMemory(create=True, size=qa_shm_size)
         _qabuf = np.ndarray((qa_shm_size,), dtype=np.uint8,
-                             buffer=q_activity_shm.buf)
+                             buffer=Gq_activity_shm.buf)
         _qabuf[:] = 0
-        q_activity_cursor = np.ndarray((1,), dtype=np.int32,
-                                        buffer=q_activity_shm.buf)
-        q_activity_deciles = []
+        Gq_activity_cursor = np.ndarray((1,), dtype=np.int32,
+                                        buffer=Gq_activity_shm.buf)
+        Gq_activity_deciles = []
         off = 4
         for _ in range(QA_N_DECILES):
-            q_activity_deciles.append(
+            Gq_activity_deciles.append(
                 np.ndarray((PROBE_W,), dtype=np.float32,
-                           buffer=q_activity_shm.buf, offset=off))
+                           buffer=Gq_activity_shm.buf, offset=off))
             off += PROBE_W * 4
-        q_activity_col = np.zeros(QA_N_DECILES, dtype=np.float32)
+        Gq_activity_col = np.zeros(QA_N_DECILES, dtype=np.float32)
+
+    # ── g-activity probe setup (per (nbhd, move) LUT-slot pair) ─────
+    g_activity_enabled = bool((probes or {}).get('g-activity'))
+    g_activity_shm     = None
+    g_activity_cursor  = None
+    g_activity_pixels  = None
+    g_activity_col     = None
+
+    if g_activity_enabled:
+        gact_shm_size = 4 + PROBE_W * ACT_H * 4
+        g_activity_shm = SharedMemory(create=True, size=gact_shm_size)
+        _gbuf = np.ndarray((gact_shm_size,), dtype=np.uint8,
+                           buffer=g_activity_shm.buf)
+        _gbuf[:] = 0
+        g_activity_cursor = np.ndarray((1,), dtype=np.int32,
+                                       buffer=g_activity_shm.buf)
+        g_activity_pixels = np.ndarray((ACT_H, PROBE_W), dtype=np.int32,
+                                       buffer=g_activity_shm.buf, offset=4)
+        g_activity_col = np.zeros(ACT_H, dtype=np.int32)
+
+    # ── gq-activity (deciles of g-activity) probe setup ─────────────
+    gq_activity_enabled  = bool((probes or {}).get('gq-activity'))
+    gq_activity_shm      = None
+    gq_activity_cursor   = None
+    gq_activity_deciles  = None
+    gq_activity_col      = None
+
+    if gq_activity_enabled:
+        gqa_shm_size = 4 + QA_N_DECILES * PROBE_W * 4
+        gq_activity_shm = SharedMemory(create=True, size=gqa_shm_size)
+        _gqabuf = np.ndarray((gqa_shm_size,), dtype=np.uint8,
+                             buffer=gq_activity_shm.buf)
+        _gqabuf[:] = 0
+        gq_activity_cursor = np.ndarray((1,), dtype=np.int32,
+                                         buffer=gq_activity_shm.buf)
+        gq_activity_deciles = []
+        off = 4
+        for _ in range(QA_N_DECILES):
+            gq_activity_deciles.append(
+                np.ndarray((PROBE_W,), dtype=np.float32,
+                           buffer=gq_activity_shm.buf, offset=off))
+            off += PROBE_W * 4
+        gq_activity_col = np.zeros(QA_N_DECILES, dtype=np.float32)
 
     # ── Time-series (ts) probe setup ────────────────────────────────
     ts_enabled     = bool((probes or {}).get('ts'))
@@ -205,10 +250,14 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
     # ── SDL2 subprocess ───────────────────────────────────────────
     cmd = [sys.executable, _WORKER,
            pixel_shm.name, ctrl_shm.name, str(N), str(px)]
-    if activity_enabled:
-        cmd += ["--activity=" + activity_shm.name]
-    if q_activity_enabled:
-        cmd += ["--q-activity=" + q_activity_shm.name]
+    if G_activity_enabled:
+        cmd += ["--G-activity=" + G_activity_shm.name]
+    if Gq_activity_enabled:
+        cmd += ["--Gq-activity=" + Gq_activity_shm.name]
+    if g_activity_enabled:
+        cmd += ["--g-activity=" + g_activity_shm.name]
+    if gq_activity_enabled:
+        cmd += ["--gq-activity=" + gq_activity_shm.name]
     if ts_enabled:
         cmd += ["--ts=" + ts_shm.name]
     if coloring_enabled:
@@ -240,10 +289,14 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
             except Exception:
                 pass
         all_shm = [pixel_shm, ctrl_shm]
-        if activity_shm is not None:
-            all_shm.append(activity_shm)
-        if q_activity_shm is not None:
-            all_shm.append(q_activity_shm)
+        if G_activity_shm is not None:
+            all_shm.append(G_activity_shm)
+        if Gq_activity_shm is not None:
+            all_shm.append(Gq_activity_shm)
+        if g_activity_shm is not None:
+            all_shm.append(g_activity_shm)
+        if gq_activity_shm is not None:
+            all_shm.append(gq_activity_shm)
         if ts_shm is not None:
             all_shm.append(ts_shm)
         if coloring_shm is not None:
@@ -344,9 +397,12 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
         return widgets.HBox([btn_h, lbl, btn_d])
 
     _ymax_btns = []
-    if activity_enabled:
+    if G_activity_enabled:
         _ymax_btns.append(_make_ymax_btns(
-            "act_ymax", 2000, sim.update_act_ymax))
+            "G_act_ymax", 2000, sim.update_G_act_ymax))
+    if g_activity_enabled:
+        _ymax_btns.append(_make_ymax_btns(
+            "g_act_ymax", 2000, sim.update_g_act_ymax))
 
     # ── Bug-coloring 3x3 template toggles ─────────────────────────────
     coloring_box    = None
@@ -417,24 +473,38 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
         _set_paused(change['new'])
 
     def _record_probes():
-        if activity_enabled:
+        if G_activity_enabled:
             sim._lib.bugs_activity_update()
-            act_cur = int(activity_cursor[0])
-            act_col_ptr = activity_col.ctypes.data_as(
-                ctypes.POINTER(ctypes.c_int32))
-            sim._lib.bugs_activity_render_col(act_col_ptr, ACT_H)
-            activity_pixels[:, act_cur] = activity_col
-            activity_cursor[0] = (act_cur + 1) % PROBE_W
-        if q_activity_enabled:
-            if not activity_enabled:
+            cur = int(G_activity_cursor[0])
+            ptr = G_activity_col.ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
+            sim._lib.bugs_activity_render_col(ptr, ACT_H)
+            G_activity_pixels[:, cur] = G_activity_col
+            G_activity_cursor[0] = (cur + 1) % PROBE_W
+        if Gq_activity_enabled:
+            if not G_activity_enabled:
                 sim._lib.bugs_activity_update()
-            qa_cur = int(q_activity_cursor[0])
-            qa_col_ptr = q_activity_col.ctypes.data_as(
-                ctypes.POINTER(ctypes.c_float))
-            sim._lib.bugs_q_activity_deciles(qa_col_ptr)
+            cur = int(Gq_activity_cursor[0])
+            ptr = Gq_activity_col.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            sim._lib.bugs_q_activity_deciles(ptr)
             for di in range(QA_N_DECILES):
-                q_activity_deciles[di][qa_cur] = q_activity_col[di]
-            q_activity_cursor[0] = (qa_cur + 1) % PROBE_W
+                Gq_activity_deciles[di][cur] = Gq_activity_col[di]
+            Gq_activity_cursor[0] = (cur + 1) % PROBE_W
+        if g_activity_enabled:
+            sim._lib.bugs_g_activity_update()
+            cur = int(g_activity_cursor[0])
+            ptr = g_activity_col.ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
+            sim._lib.bugs_g_activity_render_col(ptr, ACT_H)
+            g_activity_pixels[:, cur] = g_activity_col
+            g_activity_cursor[0] = (cur + 1) % PROBE_W
+        if gq_activity_enabled:
+            if not g_activity_enabled:
+                sim._lib.bugs_g_activity_update()
+            cur = int(gq_activity_cursor[0])
+            ptr = gq_activity_col.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            sim._lib.bugs_gq_activity_deciles(ptr)
+            for di in range(QA_N_DECILES):
+                gq_activity_deciles[di][cur] = gq_activity_col[di]
+            gq_activity_cursor[0] = (cur + 1) % PROBE_W
         if ts_enabled:
             ts_cur = int(ts_cursor[0])
             ts_traces[0][ts_cur] = float(sim.get_population())
@@ -475,20 +545,27 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
         if not _alive[0]:
             return
         saved = 0
-        if q_activity_enabled:
-            cur = int(q_activity_cursor[0])
+
+        def _save_deciles(name, cursor, deciles):
+            cur = int(cursor[0])
             t   = np.arange(PROBE_W)
             fig, ax = plt.subplots(figsize=(8, 3))
             for di in range(QA_N_DECILES):
-                y = np.roll(q_activity_deciles[di], -cur)
+                y = np.roll(deciles[di], -cur)
                 ax.plot(t, y, linewidth=0.6, label=f"p{(di+1)*10}")
             ax.set_yscale('log')
-            ax.set_title("q_activity deciles")
+            ax.set_title(f"{name} deciles")
             ax.set_xlabel("t (relative)")
             ax.legend(ncol=3, fontsize=7)
             fig.tight_layout()
-            fig.savefig("probe_q_activity.png", dpi=150)
+            fig.savefig(f"probe_{name}.png", dpi=150)
             plt.close(fig)
+
+        if Gq_activity_enabled:
+            _save_deciles("Gq_activity", Gq_activity_cursor, Gq_activity_deciles)
+            saved += 1
+        if gq_activity_enabled:
+            _save_deciles("gq_activity", gq_activity_cursor, gq_activity_deciles)
             saved += 1
         if ts_enabled:
             cur = int(ts_cursor[0])
@@ -531,13 +608,20 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
         st['step_cnt'] = 0
         ctrl[_STEP] = 0
 
-        if activity_enabled:
-            activity_cursor[0] = 0
-            activity_pixels[:] = 0
-        if q_activity_enabled:
-            q_activity_cursor[0] = 0
+        if G_activity_enabled:
+            G_activity_cursor[0] = 0
+            G_activity_pixels[:] = 0
+        if Gq_activity_enabled:
+            Gq_activity_cursor[0] = 0
             for di in range(QA_N_DECILES):
-                q_activity_deciles[di][:] = 0
+                Gq_activity_deciles[di][:] = 0
+        if g_activity_enabled:
+            g_activity_cursor[0] = 0
+            g_activity_pixels[:] = 0
+        if gq_activity_enabled:
+            gq_activity_cursor[0] = 0
+            for di in range(QA_N_DECILES):
+                gq_activity_deciles[di][:] = 0
         if ts_enabled:
             ts_cursor[0] = 0
             for ti in range(_TS_N):

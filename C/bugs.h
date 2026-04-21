@@ -100,7 +100,13 @@ uint8_t *bugs_get_bug_mask(void);       /* [N*N] 1 if a bug is on that cell */
  */
 void bugs_colorize(int32_t *pixels, int colormode);
 
-/* ── Activity probe (per-genome) ───────────────────────────────────── */
+/* ── G-activity probe (per whole-genome content hash) ──────────────────
+ *
+ * Symbols retain their historical names (bugs_activity_*). Conceptually
+ * this is "G-activity": one counter per distinct genome-content hash
+ * (FNV-1a over all 512 gene bytes), incremented by the live-bug count per
+ * tick. Bar color is stable for a given content (rediscovery reuses the
+ * same bucket and color). */
 
 void bugs_activity_update(void);
 void bugs_activity_render_col(int32_t *col, int height);
@@ -109,9 +115,28 @@ int  bugs_activity_get(uint32_t *keys, uint64_t *activities,
 void bugs_set_act_ymax(int y);
 int  bugs_get_act_ymax(void);
 
-/* ── Activity quantile probe (9 deciles p10..p90) ──────────────────── */
+/* Gq-activity: 9 deciles of G-activity (p10..p90). */
 
 void bugs_q_activity_deciles(float *deciles_out);
+
+/* ── g-activity probe (per (input, output) LUT-slot pair) ──────────────
+ *
+ * Key = (9-bit Moore neighborhood, 8-bit dx+15, 8-bit dy+15) packed into
+ * a 32-bit integer with bit 31 set. For each live bug per update, we look
+ * up its current neighborhood bits and the gene at that LUT index; the
+ * (nbhd, dx, dy) triple identifies the (input, output) pair the bug uses
+ * this tick, and that bucket's counter is incremented by one. */
+
+void bugs_g_activity_update(void);
+void bugs_g_activity_render_col(int32_t *col, int height);
+int  bugs_g_activity_get(uint32_t *keys, uint64_t *activities,
+                         uint32_t *pop_counts, int32_t *colors, int max_n);
+void bugs_set_g_act_ymax(int y);
+int  bugs_get_g_act_ymax(void);
+
+/* gq-activity: 9 deciles of g-activity (p10..p90). */
+
+void bugs_gq_activity_deciles(float *deciles_out);
 
 /* ── Bug-coloring probe (per-LUT-index move distribution) ──────────── */
 

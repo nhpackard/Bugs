@@ -6,7 +6,8 @@ All output goes to the terminal where Jupyter was started.
 
 Usage (internal):
     python sdl_worker.py <pixel_shm> <ctrl_shm> <N> <px> \\
-                         [--activity=<shm>] [--q-activity=<shm>] \\
+                         [--G-activity=<shm>]  [--Gq-activity=<shm>] \\
+                         [--g-activity=<shm>]  [--gq-activity=<shm>] \\
                          [--ts=<shm>] [--coloring=<shm>]
 
 ctrl_shm layout (5 × int32)
@@ -222,15 +223,21 @@ def main():
     px = int(sys.argv[4])
     W, H = N * px, N * px
 
-    activity_shm_name   = None
-    q_activity_shm_name = None
-    ts_shm_name         = None
-    coloring_shm_name   = None
+    G_activity_shm_name  = None
+    Gq_activity_shm_name = None
+    g_activity_shm_name  = None
+    gq_activity_shm_name = None
+    ts_shm_name          = None
+    coloring_shm_name    = None
     for arg in sys.argv[5:]:
-        if arg.startswith("--activity="):
-            activity_shm_name = arg[len("--activity="):]
-        elif arg.startswith("--q-activity="):
-            q_activity_shm_name = arg[len("--q-activity="):]
+        if arg.startswith("--G-activity="):
+            G_activity_shm_name = arg[len("--G-activity="):]
+        elif arg.startswith("--Gq-activity="):
+            Gq_activity_shm_name = arg[len("--Gq-activity="):]
+        elif arg.startswith("--g-activity="):
+            g_activity_shm_name = arg[len("--g-activity="):]
+        elif arg.startswith("--gq-activity="):
+            gq_activity_shm_name = arg[len("--gq-activity="):]
         elif arg.startswith("--ts="):
             ts_shm_name = arg[len("--ts="):]
         elif arg.startswith("--coloring="):
@@ -239,8 +246,10 @@ def main():
     ACT_H = 2 * PROBE_H  # 256
 
     print(f"Bugs SDL: starting  N={N} px={px}  "
-          f"activity={bool(activity_shm_name)}  "
-          f"q_activity={bool(q_activity_shm_name)}  "
+          f"G-activity={bool(G_activity_shm_name)}  "
+          f"Gq-activity={bool(Gq_activity_shm_name)}  "
+          f"g-activity={bool(g_activity_shm_name)}  "
+          f"gq-activity={bool(gq_activity_shm_name)}  "
           f"ts={bool(ts_shm_name)}  "
           f"coloring={bool(coloring_shm_name)}", flush=True)
 
@@ -258,47 +267,75 @@ def main():
     pixels = np.ndarray((N * N,), dtype=np.int32, buffer=pixel_shm.buf)
     ctrl   = np.ndarray((5,),     dtype=np.int32, buffer=ctrl_shm.buf)
 
-    # ── Activity shared memory ───────────────────────────────────
-    activity_shm     = None
-    activity_cursor  = None
-    activity_pixels  = None
-    if activity_shm_name:
+    # ── Helper to open an activity-strip shm ─────────────────────
+    def _open_activity_shm(name, label):
         try:
-            activity_shm = SharedMemory(name=activity_shm_name)
-            activity_cursor = np.ndarray((1,), dtype=np.int32,
-                                         buffer=activity_shm.buf)
-            activity_pixels = np.ndarray((ACT_H, PROBE_W), dtype=np.int32,
-                                         buffer=activity_shm.buf, offset=4)
-            print(f"Bugs SDL: activity shm opened ({ACT_H}x{PROBE_W})",
+            shm = SharedMemory(name=name)
+            cursor = np.ndarray((1,), dtype=np.int32, buffer=shm.buf)
+            pixels = np.ndarray((ACT_H, PROBE_W), dtype=np.int32,
+                                buffer=shm.buf, offset=4)
+            print(f"Bugs SDL: {label} shm opened ({ACT_H}x{PROBE_W})",
                   flush=True)
+            return shm, cursor, pixels
         except Exception as e:
-            print(f"Bugs SDL: activity SharedMemory open failed: {e}",
+            print(f"Bugs SDL: {label} SharedMemory open failed: {e}",
                   flush=True)
-            activity_shm_name = None
+            return None, None, None
 
-    # ── q_activity shared memory ─────────────────────────────────
-    QA_N_DECILES        = 9
-    q_activity_shm      = None
-    q_activity_cursor   = None
-    q_activity_deciles  = None
-    if q_activity_shm_name:
+    def _open_deciles_shm(name, label, n_deciles):
         try:
-            q_activity_shm = SharedMemory(name=q_activity_shm_name)
-            q_activity_cursor = np.ndarray((1,), dtype=np.int32,
-                                            buffer=q_activity_shm.buf)
-            q_activity_deciles = []
+            shm = SharedMemory(name=name)
+            cursor = np.ndarray((1,), dtype=np.int32, buffer=shm.buf)
+            deciles = []
             off = 4
-            for _ in range(QA_N_DECILES):
-                q_activity_deciles.append(
+            for _ in range(n_deciles):
+                deciles.append(
                     np.ndarray((PROBE_W,), dtype=np.float32,
-                               buffer=q_activity_shm.buf, offset=off))
+                               buffer=shm.buf, offset=off))
                 off += PROBE_W * 4
-            print(f"Bugs SDL: q_activity shm opened ({QA_N_DECILES}x{PROBE_W})",
+            print(f"Bugs SDL: {label} shm opened ({n_deciles}x{PROBE_W})",
                   flush=True)
+            return shm, cursor, deciles
         except Exception as e:
-            print(f"Bugs SDL: q_activity SharedMemory open failed: {e}",
+            print(f"Bugs SDL: {label} SharedMemory open failed: {e}",
                   flush=True)
-            q_activity_shm_name = None
+            return None, None, None
+
+    # ── G-activity shared memory ─────────────────────────────────
+    G_activity_shm    = None
+    G_activity_cursor = None
+    G_activity_pixels = None
+    if G_activity_shm_name:
+        G_activity_shm, G_activity_cursor, G_activity_pixels = \
+            _open_activity_shm(G_activity_shm_name, "G-activity")
+        if G_activity_shm is None: G_activity_shm_name = None
+
+    # ── g-activity shared memory ─────────────────────────────────
+    g_activity_shm    = None
+    g_activity_cursor = None
+    g_activity_pixels = None
+    if g_activity_shm_name:
+        g_activity_shm, g_activity_cursor, g_activity_pixels = \
+            _open_activity_shm(g_activity_shm_name, "g-activity")
+        if g_activity_shm is None: g_activity_shm_name = None
+
+    # ── Gq/gq-activity shared memory ─────────────────────────────
+    QA_N_DECILES         = 9
+    Gq_activity_shm      = None
+    Gq_activity_cursor   = None
+    Gq_activity_deciles  = None
+    if Gq_activity_shm_name:
+        Gq_activity_shm, Gq_activity_cursor, Gq_activity_deciles = \
+            _open_deciles_shm(Gq_activity_shm_name, "Gq-activity", QA_N_DECILES)
+        if Gq_activity_shm is None: Gq_activity_shm_name = None
+
+    gq_activity_shm      = None
+    gq_activity_cursor   = None
+    gq_activity_deciles  = None
+    if gq_activity_shm_name:
+        gq_activity_shm, gq_activity_cursor, gq_activity_deciles = \
+            _open_deciles_shm(gq_activity_shm_name, "gq-activity", QA_N_DECILES)
+        if gq_activity_shm is None: gq_activity_shm_name = None
 
     # ── coloring shared memory ───────────────────────────────────
     coloring_shm    = None
@@ -392,156 +429,83 @@ def main():
 
     # Stack probe windows top-down to the left of the main window.
     next_probe_y = 0
-    real_title_h = TITLE_BAR_H
+    real_title_h = [TITLE_BAR_H]  # mutable so helper can calibrate once
 
-    # ── Activity window ──────────────────────────────────────────
-    act_window_p  = None
-    act_surface_p = None
-    act_dst       = None
-    if activity_shm is not None:
-        aw_x = main_x - PROBE_W
-        aw = sdl2.SDL_CreateWindow(
-            b"activity",
-            aw_x, next_probe_y,
-            PROBE_W, ACT_H,
+    def _create_probe_window(title_bytes, w, h, label):
+        """Create a probe window at (main_x - w, next_probe_y).
+        Returns (window_p, surface_p, dst, new_next_y) or (None, None, None, next_probe_y) on failure.
+        Calibrates real_title_h from first successfully created window."""
+        win = sdl2.SDL_CreateWindow(
+            title_bytes,
+            main_x - w, next_probe_y,
+            w, h,
             sdl2.SDL_WINDOW_SHOWN,
         )
-        if aw:
-            actual_y = ctypes.c_int(0)
-            sdl2.SDL_GetWindowPosition(aw, None, ctypes.byref(actual_y))
+        if not win:
+            print(f"Bugs SDL: {label} window creation failed", flush=True)
+            return None, None, None, next_probe_y
+        actual_y = ctypes.c_int(0)
+        sdl2.SDL_GetWindowPosition(win, None, ctypes.byref(actual_y))
+        if real_title_h[0] == TITLE_BAR_H:
             top_border = ctypes.c_int(0)
             ret = sdl2.SDL_GetWindowBordersSize(
-                aw, ctypes.byref(top_border), None, None, None)
+                win, ctypes.byref(top_border), None, None, None)
             if ret == 0 and top_border.value > 0:
-                real_title_h = top_border.value
-            next_probe_y = actual_y.value + ACT_H + real_title_h
-            aps = sdl2.SDL_GetWindowSurface(aw)
-            if aps:
-                sdl2.SDL_SetSurfaceBlendMode(aps, sdl2.SDL_BLENDMODE_NONE)
-                asurf   = aps.contents
-                ap_i32  = asurf.pitch // 4
-                ap_ptr  = ctypes.cast(asurf.pixels,
-                                      ctypes.POINTER(ctypes.c_int32))
-                ad_flat = np.ctypeslib.as_array(ap_ptr,
-                                                shape=(ACT_H * ap_i32,))
-                act_dst       = ad_flat.reshape(ACT_H, ap_i32)
-                act_window_p  = aw
-                act_surface_p = aps
-                print("Bugs SDL: activity window created", flush=True)
-            else:
-                sdl2.SDL_DestroyWindow(aw)
-        else:
-            print("Bugs SDL: activity window creation failed", flush=True)
+                real_title_h[0] = top_border.value
+        new_next_y = actual_y.value + h + real_title_h[0]
+        sps = sdl2.SDL_GetWindowSurface(win)
+        if not sps:
+            sdl2.SDL_DestroyWindow(win)
+            return None, None, None, next_probe_y
+        sdl2.SDL_SetSurfaceBlendMode(sps, sdl2.SDL_BLENDMODE_NONE)
+        surf    = sps.contents
+        p_i32   = surf.pitch // 4
+        p_ptr   = ctypes.cast(surf.pixels, ctypes.POINTER(ctypes.c_int32))
+        flat    = np.ctypeslib.as_array(p_ptr, shape=(h * p_i32,))
+        dst_arr = flat.reshape(h, p_i32)
+        print(f"Bugs SDL: {label} window created", flush=True)
+        return win, sps, dst_arr, new_next_y
 
-    # ── q_activity window ────────────────────────────────────────
-    qa_window_p    = None
-    qa_surface_p   = None
-    qa_dst         = None
-    qa_global_max  = 0.0
-    if q_activity_shm is not None:
-        qaw_x = main_x - PROBE_W
-        qaw = sdl2.SDL_CreateWindow(
-            b"q_activity",
-            qaw_x, next_probe_y,
-            PROBE_W, PROBE_H,
-            sdl2.SDL_WINDOW_SHOWN,
-        )
-        if qaw:
-            actual_y = ctypes.c_int(0)
-            sdl2.SDL_GetWindowPosition(qaw, None, ctypes.byref(actual_y))
-            if act_window_p is None:
-                top_border = ctypes.c_int(0)
-                ret = sdl2.SDL_GetWindowBordersSize(
-                    qaw, ctypes.byref(top_border), None, None, None)
-                if ret == 0 and top_border.value > 0:
-                    real_title_h = top_border.value
-            next_probe_y = actual_y.value + PROBE_H + real_title_h
-            qaps = sdl2.SDL_GetWindowSurface(qaw)
-            if qaps:
-                sdl2.SDL_SetSurfaceBlendMode(qaps, sdl2.SDL_BLENDMODE_NONE)
-                qasurf  = qaps.contents
-                qap_i32 = qasurf.pitch // 4
-                qap_ptr = ctypes.cast(qasurf.pixels,
-                                       ctypes.POINTER(ctypes.c_int32))
-                qad_flat = np.ctypeslib.as_array(qap_ptr,
-                                                  shape=(PROBE_H * qap_i32,))
-                qa_dst       = qad_flat.reshape(PROBE_H, qap_i32)
-                qa_window_p  = qaw
-                qa_surface_p = qaps
-                print("Bugs SDL: q_activity window created", flush=True)
-            else:
-                sdl2.SDL_DestroyWindow(qaw)
-        else:
-            print("Bugs SDL: q_activity window creation failed", flush=True)
+    # Stacking order (top → bottom): G, Gq, g, gq.
+    # ── G-activity window ────────────────────────────────────────
+    G_win_p = G_surf_p = G_dst = None
+    if G_activity_shm is not None:
+        G_win_p, G_surf_p, G_dst, next_probe_y = _create_probe_window(
+            b"G-activity", PROBE_W, ACT_H, "G-activity")
+
+    # ── Gq-activity window (deciles) ─────────────────────────────
+    Gq_win_p = Gq_surf_p = Gq_dst = None
+    Gq_global_max = 0.0
+    if Gq_activity_shm is not None:
+        Gq_win_p, Gq_surf_p, Gq_dst, next_probe_y = _create_probe_window(
+            b"Gq-activity", PROBE_W, PROBE_H, "Gq-activity")
+
+    # ── g-activity window ────────────────────────────────────────
+    g_win_p = g_surf_p = g_dst = None
+    if g_activity_shm is not None:
+        g_win_p, g_surf_p, g_dst, next_probe_y = _create_probe_window(
+            b"g-activity", PROBE_W, ACT_H, "g-activity")
+
+    # ── gq-activity window (deciles) ─────────────────────────────
+    gq_win_p = gq_surf_p = gq_dst = None
+    gq_global_max = 0.0
+    if gq_activity_shm is not None:
+        gq_win_p, gq_surf_p, gq_dst, next_probe_y = _create_probe_window(
+            b"gq-activity", PROBE_W, PROBE_H, "gq-activity")
 
     # ── ts window ────────────────────────────────────────────────
-    ts_window_p   = None
-    ts_surface_p  = None
-    ts_dst        = None
+    ts_window_p = ts_surface_p = ts_dst = None
     ts_global_max = 0.0
     if ts_shm is not None:
-        tsw_x = main_x - PROBE_W
-        tsw = sdl2.SDL_CreateWindow(
-            b"time series",
-            tsw_x, next_probe_y,
-            PROBE_W, PROBE_H,
-            sdl2.SDL_WINDOW_SHOWN,
-        )
-        if tsw:
-            actual_y = ctypes.c_int(0)
-            sdl2.SDL_GetWindowPosition(tsw, None, ctypes.byref(actual_y))
-            next_probe_y = actual_y.value + PROBE_H + real_title_h
-            tsps = sdl2.SDL_GetWindowSurface(tsw)
-            if tsps:
-                sdl2.SDL_SetSurfaceBlendMode(tsps, sdl2.SDL_BLENDMODE_NONE)
-                tssurf  = tsps.contents
-                tsp_i32 = tssurf.pitch // 4
-                tsp_ptr = ctypes.cast(tssurf.pixels,
-                                      ctypes.POINTER(ctypes.c_int32))
-                tsd_flat = np.ctypeslib.as_array(tsp_ptr,
-                                                 shape=(PROBE_H * tsp_i32,))
-                ts_dst       = tsd_flat.reshape(PROBE_H, tsp_i32)
-                ts_window_p  = tsw
-                ts_surface_p = tsps
-                print("Bugs SDL: ts window created", flush=True)
-            else:
-                sdl2.SDL_DestroyWindow(tsw)
-        else:
-            print("Bugs SDL: ts window creation failed", flush=True)
+        ts_window_p, ts_surface_p, ts_dst, next_probe_y = \
+            _create_probe_window(b"time series", PROBE_W, PROBE_H, "ts")
 
     # ── coloring window ─────────────────────────────────────────
-    col_window_p  = None
-    col_surface_p = None
-    col_dst       = None
+    col_window_p = col_surface_p = col_dst = None
     if coloring_shm is not None:
-        cw_x = main_x - COLORING_W
-        cw = sdl2.SDL_CreateWindow(
-            b"bug coloring",
-            cw_x, next_probe_y,
-            COLORING_W, COLORING_H,
-            sdl2.SDL_WINDOW_SHOWN,
-        )
-        if cw:
-            actual_y = ctypes.c_int(0)
-            sdl2.SDL_GetWindowPosition(cw, None, ctypes.byref(actual_y))
-            next_probe_y = actual_y.value + COLORING_H + real_title_h
-            cps = sdl2.SDL_GetWindowSurface(cw)
-            if cps:
-                sdl2.SDL_SetSurfaceBlendMode(cps, sdl2.SDL_BLENDMODE_NONE)
-                csurf  = cps.contents
-                cp_i32 = csurf.pitch // 4
-                cp_ptr = ctypes.cast(csurf.pixels,
-                                     ctypes.POINTER(ctypes.c_int32))
-                cd_flat = np.ctypeslib.as_array(cp_ptr,
-                                                shape=(COLORING_H * cp_i32,))
-                col_dst       = cd_flat.reshape(COLORING_H, cp_i32)
-                col_window_p  = cw
-                col_surface_p = cps
-                print("Bugs SDL: coloring window created", flush=True)
-            else:
-                sdl2.SDL_DestroyWindow(cw)
-        else:
-            print("Bugs SDL: coloring window creation failed", flush=True)
+        col_window_p, col_surface_p, col_dst, next_probe_y = \
+            _create_probe_window(b"bug coloring",
+                                 COLORING_W, COLORING_H, "coloring")
 
     print("Bugs SDL: entering main loop", flush=True)
 
@@ -574,23 +538,39 @@ def main():
         sdl2.SDL_UnlockSurface(surface_p)
         sdl2.SDL_UpdateWindowSurface(window_p)
 
-        # Activity window (scroll so newest column is on the right)
-        if act_window_p is not None and activity_pixels is not None:
-            sdl2.SDL_LockSurface(act_surface_p)
-            cur_act = int(activity_cursor[0])
-            act_dst[:ACT_H, :PROBE_W] = np.roll(activity_pixels, -cur_act,
-                                                  axis=1)
-            sdl2.SDL_UnlockSurface(act_surface_p)
-            sdl2.SDL_UpdateWindowSurface(act_window_p)
+        # G-activity window (scroll so newest column is on the right)
+        if G_win_p is not None and G_activity_pixels is not None:
+            sdl2.SDL_LockSurface(G_surf_p)
+            cur = int(G_activity_cursor[0])
+            G_dst[:ACT_H, :PROBE_W] = np.roll(G_activity_pixels, -cur, axis=1)
+            sdl2.SDL_UnlockSurface(G_surf_p)
+            sdl2.SDL_UpdateWindowSurface(G_win_p)
 
-        # q_activity window
-        if qa_window_p is not None and q_activity_deciles is not None:
-            sdl2.SDL_LockSurface(qa_surface_p)
-            cur_qa = int(q_activity_cursor[0])
-            qa_global_max = _render_q_activity(qa_dst, q_activity_deciles,
-                                                cur_qa, qa_global_max)
-            sdl2.SDL_UnlockSurface(qa_surface_p)
-            sdl2.SDL_UpdateWindowSurface(qa_window_p)
+        # g-activity window
+        if g_win_p is not None and g_activity_pixels is not None:
+            sdl2.SDL_LockSurface(g_surf_p)
+            cur = int(g_activity_cursor[0])
+            g_dst[:ACT_H, :PROBE_W] = np.roll(g_activity_pixels, -cur, axis=1)
+            sdl2.SDL_UnlockSurface(g_surf_p)
+            sdl2.SDL_UpdateWindowSurface(g_win_p)
+
+        # Gq-activity window (deciles)
+        if Gq_win_p is not None and Gq_activity_deciles is not None:
+            sdl2.SDL_LockSurface(Gq_surf_p)
+            cur = int(Gq_activity_cursor[0])
+            Gq_global_max = _render_q_activity(Gq_dst, Gq_activity_deciles,
+                                                cur, Gq_global_max)
+            sdl2.SDL_UnlockSurface(Gq_surf_p)
+            sdl2.SDL_UpdateWindowSurface(Gq_win_p)
+
+        # gq-activity window (deciles)
+        if gq_win_p is not None and gq_activity_deciles is not None:
+            sdl2.SDL_LockSurface(gq_surf_p)
+            cur = int(gq_activity_cursor[0])
+            gq_global_max = _render_q_activity(gq_dst, gq_activity_deciles,
+                                                cur, gq_global_max)
+            sdl2.SDL_UnlockSurface(gq_surf_p)
+            sdl2.SDL_UpdateWindowSurface(gq_win_p)
 
         # ts (time-series) window
         if ts_window_p is not None and ts_traces is not None:
@@ -626,18 +606,26 @@ def main():
         sdl2.SDL_DestroyWindow(col_window_p)
     if ts_window_p is not None:
         sdl2.SDL_DestroyWindow(ts_window_p)
-    if qa_window_p is not None:
-        sdl2.SDL_DestroyWindow(qa_window_p)
-    if act_window_p is not None:
-        sdl2.SDL_DestroyWindow(act_window_p)
+    if gq_win_p is not None:
+        sdl2.SDL_DestroyWindow(gq_win_p)
+    if Gq_win_p is not None:
+        sdl2.SDL_DestroyWindow(Gq_win_p)
+    if g_win_p is not None:
+        sdl2.SDL_DestroyWindow(g_win_p)
+    if G_win_p is not None:
+        sdl2.SDL_DestroyWindow(G_win_p)
     sdl2.SDL_DestroyWindow(window_p)
     sdl2.SDL_Quit()
     pixel_shm.close()
     ctrl_shm.close()
-    if activity_shm is not None:
-        activity_shm.close()
-    if q_activity_shm is not None:
-        q_activity_shm.close()
+    if G_activity_shm is not None:
+        G_activity_shm.close()
+    if g_activity_shm is not None:
+        g_activity_shm.close()
+    if Gq_activity_shm is not None:
+        Gq_activity_shm.close()
+    if gq_activity_shm is not None:
+        gq_activity_shm.close()
     if ts_shm is not None:
         ts_shm.close()
     if coloring_shm is not None:

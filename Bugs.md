@@ -13,8 +13,12 @@ implementation lives in `plugins/Packard Bugs/` and is described in detail in
 - SplitMix64 RNG with `bugs_set_seed(...)` — Obj‑C used unseeded `random()`.
 - 9‑bit **Moore** neighborhood (3×3) indexing a 512‑gene LUT per bug
   (Obj‑C used a 5‑cell Von Neumann plus‑shape → 32 genes).
-- Per‑genome activity probe with hash‑color strip chart.
-- 9‑decile quantile activity probe (`q_activity`).
+- Per‑genome **G‑activity** probe (whole‑genome FNV‑1a content hash)
+  with hash‑color strip chart.
+- Per‑LUT‑slot **g‑activity** probe: one bucket per `(neighborhood, dx, dy)`
+  (input, output) pair actually used by the population — the action‑level
+  analogue of G‑activity.
+- 9‑decile quantile versions of both (`Gq‑activity`, `gq‑activity`).
 - Scalar time‑series probe (`ts`) with multiple colored traces (population,
   total food‑in‑bugs).
 - Bug‑coloring probe (`coloring`): user picks a 9‑bit LUT index via a
@@ -146,10 +150,17 @@ sim.get_bug_mask()     # (N,N) uint8 copy; 1 where a bug is present
 ### Probes (programmatic)
 
 ```python
-sim.activity_update()                # bucketize one tick of activity
-table = sim.get_activity(max_n=4096) # {'hash','activity','pop_count','color'}
-sim.q_activity_deciles()             # float32[9]: p10..p90
-sim.update_act_ymax(y)               # per-bar Y-axis scale in the strip
+# G-activity: one bucket per whole-genome content hash
+sim.G_activity_update()                 # bucketize one tick
+G = sim.get_G_activity(max_n=4096)      # {'hash','activity','pop_count','color'}
+sim.Gq_activity_deciles()               # float32[9]: p10..p90 of G-activity
+sim.update_G_act_ymax(y)                # strip Y-axis scale
+
+# g-activity: one bucket per (nbhd, dx, dy) LUT-slot actually used
+sim.g_activity_update()                 # bucketize one tick
+g = sim.get_g_activity(max_n=200000)    # {'key','activity','pop_count','color'}
+sim.gq_activity_deciles()               # float32[9]: p10..p90 of g-activity
+sim.update_g_act_ymax(y)                # strip Y-axis scale
 ```
 
 ### Recipe export/import
@@ -159,8 +170,8 @@ path = sim.export_recipe("descriptor", probes={...}, colormode=0)
 # → ../Runs/YYYY-MM-DD_descriptor.bugs
 
 from python.bugs_py import import_run
-sim, display_kwargs = import_run("../Runs/....bugs")   # recipe='init' (default)
-sim, display_kwargs = import_run("../Runs/....bugs", recipe='final')  # use post-drag params
+sim, display_kwargs = import_run("../Runs/....bugs")  # recipe='final' (default): explored state
+sim, display_kwargs = import_run("../Runs/....bugs", recipe='init')   # original t=0 params
 
 import_run()   # no args: list available .bugs files under Runs/
 ```
@@ -186,7 +197,8 @@ sim.init(256, food_inc=0.05, mutation_rate=0.01)
 sim.state(food_source='uniform', food_source_value=1.0, seed_density=0.2)
 
 run_with_controls(sim, cell_px=2,
-                  probes={'activity': True, 'q_activity': True})
+                  probes={'G-activity': True, 'Gq-activity': True,
+                          'g-activity': True, 'gq-activity': True})
 ```
 
 The cell returns immediately; widgets render below it, an SDL2 window opens,
@@ -302,20 +314,37 @@ These are loaded from `../CocoaBugs/*.png` relative to the repo root.
 
 ## Probes
 
-### `activity`
+### `G-activity` (whole‑genome content)
 
-Per‑genome activity hash table. Each living bug's genome is hashed; per‑hash
-cumulative activity (ticks alive) is rendered as a scrolling strip, with the
-bar color keyed off the hash (so a given genotype keeps its color as it
-scrolls). Use the `act_ymax <| / |>` halve/double buttons to adjust the Y
-scaling.
+Per‑genome activity hash table. For each live bug per tick, the bug's full
+512‑byte gene array is hashed (FNV‑1a over content); the bucket for that
+hash is incremented by one. Rendered as a scrolling strip, bar color keyed
+off the hash — a given genotype keeps its color as it scrolls, and
+rediscovery of an extinct genome reuses its original bucket/color. Use the
+`G_act_ymax <| / |>` buttons to adjust the per‑bar Y scaling.
 
-### `q_activity`
+### `Gq-activity` (G‑activity deciles)
 
-Population‑level activity deciles p10..p90 on a log‑Y scrolling chart. Each
-color is one decile (blue = p10, green = p50, red = p90). Useful for seeing
-when a few dominant genotypes pull away from the bulk — watch the p90 line
-diverge from the median.
+Population‑level G‑activity deciles p10..p90 on a log‑Y scrolling chart.
+Each color is one decile (blue = p10, green = p50, red = p90). Useful for
+seeing when a few dominant genotypes pull away from the bulk — watch the
+p90 line diverge from the median.
+
+### `g-activity` (per LUT‑slot)
+
+Per‑`(input, output)` activity. For each live bug per tick, we look up its
+current 9‑bit Moore neighborhood (the "input"), read the gene at that LUT
+index to get `(dx, dy)` (the "output"), and increment the bucket keyed by
+`(nbhd, dx, dy)`. Same scrolling‑strip visualisation as G‑activity, but the
+buckets now represent behavioural motifs ("when I see *this* pattern, I
+move *this* way") that cut across genome identity — distinct genomes
+sharing a motif land in the same bucket. Use the `g_act_ymax <| / |>`
+buttons to adjust scaling.
+
+### `gq-activity` (g‑activity deciles)
+
+Population‑level g‑activity deciles p10..p90 (log‑Y scrolling). Analogous
+to Gq‑activity but over the motif distribution.
 
 ### `ts`
 
@@ -344,7 +373,8 @@ motions a population would take if every bug saw the selected neighborhood.
 Enable probes:
 
 ```python
-run_with_controls(sim, probes={'activity': True, 'q_activity': True,
+run_with_controls(sim, probes={'G-activity':  True, 'Gq-activity': True,
+                               'g-activity':  True, 'gq-activity': True,
                                'ts': True, 'coloring': True})
 ```
 
@@ -359,7 +389,9 @@ the current metaparams (initial + final), food source configuration, seed
 density, enabled probes, and color mode:
 
 ```python
-sim.export_recipe("drought-recovery", probes={'activity': True}, colormode=1)
+sim.export_recipe("drought-recovery",
+                  probes={'G-activity': True, 'g-activity': True},
+                  colormode=1)
 # → ../Runs/2026-04-20_drought-recovery.bugs
 ```
 

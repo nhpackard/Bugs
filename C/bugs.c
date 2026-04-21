@@ -93,6 +93,8 @@ static float g_food_bug   = 0.0f;   /* running Σ of alive-bug food */
 
 static void act_reset(void);
 static void act_free_all(void);
+static void gact_reset(void);
+static void gact_free_all(void);
 
 /* ── Pool helpers ──────────────────────────────────────────────────── */
 
@@ -184,6 +186,19 @@ static int32_t hash_to_color(uint32_t h)
     return (int32_t)(0xFF000000u | (h & 0x00FFFFFFu));
 }
 
+/* Murmur3 32-bit finalizer. Spreads structured keys (e.g. g-activity's
+ * packed (nbhd, dx, dy)) across the low 24 bits before colorizing, so
+ * neighboring keys don't collapse to near-identical shades. */
+static inline uint32_t mix32(uint32_t k)
+{
+    k ^= k >> 16;
+    k *= 0x85ebca6bu;
+    k ^= k >> 13;
+    k *= 0xc2b2ae35u;
+    k ^= k >> 16;
+    return k;
+}
+
 /* ── Lifecycle ─────────────────────────────────────────────────────── */
 
 void bugs_init(int N)
@@ -207,6 +222,7 @@ void bugs_init(int N)
     g_food_bug    = 0.0f;
 
     act_reset();
+    gact_reset();
 }
 
 void bugs_free(void)
@@ -222,6 +238,7 @@ void bugs_free(void)
     pool_cap = n_alive = n_free = 0;
     gN = 0;
     act_free_all();
+    gact_free_all();
 }
 
 /* ── Parameter setters ─────────────────────────────────────────────── */
@@ -316,6 +333,7 @@ void bugs_exterminate(void)
     g_births_last = g_deaths_last = 0;
     g_food_bug    = 0.0f;
     act_reset();
+    gact_reset();
 }
 
 void bugs_seed_with_density(float density)
@@ -604,6 +622,235 @@ void bugs_q_activity_deciles(float *deciles_out)
     for (int i = 0; i < act_cap; i++) {
         if (act_keys[i] == ACT_EMPTY || act_vals[i].pop_count == 0) continue;
         buf[n++] = (float)act_vals[i].activity * inv_D;
+    }
+    qsort(buf, (size_t)n, sizeof(float), _float_cmp);
+    for (int d = 0; d < 9; d++) {
+        int idx = (int)((float)(d + 1) * 0.1f * (float)n);
+        if (idx >= n) idx = n - 1;
+        deciles_out[d] = buf[idx];
+    }
+    free(buf);
+}
+
+/* ── g-activity: per-(input, output) pair ──────────────────────────────
+ *
+ * Distinct from the "activity" table above (which is renamed G-activity at
+ * the API level): there the key is a hash of the WHOLE genome. Here the key
+ * encodes a single (neighborhood pattern, move) pair — the input/output of
+ * one LUT slot. Each live bug contributes one sample per update, for the
+ * LUT entry it is currently "using" (the gene indexed by its current 9-bit
+ * Moore neighborhood).
+ *
+ * Key layout (32-bit, high bit set so it is never the ACT_EMPTY sentinel 0):
+ *   bit 31      : always 1
+ *   bits 30..16 : nbhd (0..511, takes bits 24..16)
+ *   bits 15.. 8 : dx + 15 (0..30)
+ *   bits  7.. 0 : dy + 15 (0..30)
+ */
+
+static uint32_t    *gact_keys = NULL;
+static act_entry_t *gact_vals = NULL;
+static int          gact_cap  = 0;
+static int          gact_cnt  = 0;
+static int          gact_ymax = 2000;
+
+static void gact_init_table(void)
+{
+    gact_cap  = ACT_INIT_CAP;
+    gact_cnt  = 0;
+    gact_keys = calloc((size_t)gact_cap, sizeof(uint32_t));
+    gact_vals = calloc((size_t)gact_cap, sizeof(act_entry_t));
+}
+
+static void gact_free_all(void)
+{
+    free(gact_keys); gact_keys = NULL;
+    free(gact_vals); gact_vals = NULL;
+    gact_cap = gact_cnt = 0;
+}
+
+static void gact_reset(void)
+{
+    gact_free_all();
+    gact_init_table();
+}
+
+static void gact_resize(void)
+{
+    int new_cap = gact_cap * 2;
+    uint32_t    *nk = calloc((size_t)new_cap, sizeof(uint32_t));
+    act_entry_t *nv = calloc((size_t)new_cap, sizeof(act_entry_t));
+    for (int i = 0; i < gact_cap; i++) {
+        if (gact_keys[i] == ACT_EMPTY) continue;
+        uint32_t slot = gact_keys[i] % (uint32_t)new_cap;
+        while (nk[slot] != ACT_EMPTY)
+            slot = (slot + 1) % (uint32_t)new_cap;
+        nk[slot] = gact_keys[i];
+        nv[slot] = gact_vals[i];
+    }
+    free(gact_keys); free(gact_vals);
+    gact_keys = nk; gact_vals = nv; gact_cap = new_cap;
+}
+
+static act_entry_t *gact_find_or_insert(uint32_t key, int32_t color)
+{
+    if (gact_cnt * 10 >= gact_cap * 7) gact_resize();
+    uint32_t slot = key % (uint32_t)gact_cap;
+    while (gact_keys[slot] != ACT_EMPTY) {
+        if (gact_keys[slot] == key) return &gact_vals[slot];
+        slot = (slot + 1) % (uint32_t)gact_cap;
+    }
+    gact_keys[slot] = key;
+    gact_vals[slot].activity  = 0;
+    gact_vals[slot].pop_count = 0;
+    gact_vals[slot].color     = color;
+    gact_cnt++;
+    return &gact_vals[slot];
+}
+
+static void gact_compact(uint64_t threshold)
+{
+    int keep = 0;
+    for (int i = 0; i < gact_cap; i++) {
+        if (gact_keys[i] == ACT_EMPTY) continue;
+        if (gact_vals[i].pop_count > 0 || gact_vals[i].activity >= threshold)
+            keep++;
+    }
+    int new_cap = ACT_INIT_CAP;
+    while (new_cap * 7 < keep * 10 + 10) new_cap *= 2;
+
+    uint32_t    *nk = calloc((size_t)new_cap, sizeof(uint32_t));
+    act_entry_t *nv = calloc((size_t)new_cap, sizeof(act_entry_t));
+    int new_cnt = 0;
+    for (int i = 0; i < gact_cap; i++) {
+        if (gact_keys[i] == ACT_EMPTY) continue;
+        if (gact_vals[i].pop_count == 0 && gact_vals[i].activity < threshold)
+            continue;
+        uint32_t slot = gact_keys[i] % (uint32_t)new_cap;
+        while (nk[slot] != ACT_EMPTY) slot = (slot + 1) % (uint32_t)new_cap;
+        nk[slot] = gact_keys[i];
+        nv[slot] = gact_vals[i];
+        new_cnt++;
+    }
+    free(gact_keys); free(gact_vals);
+    gact_keys = nk; gact_vals = nv;
+    gact_cap  = new_cap;
+    gact_cnt  = new_cnt;
+}
+
+void bugs_set_g_act_ymax(int y) { if (y > 0) gact_ymax = y; }
+int  bugs_get_g_act_ymax(void)  { return gact_ymax; }
+
+static inline uint32_t g_pair_key(int nbhd, int8_t dx, int8_t dy)
+{
+    return 0x80000000u
+         | ((uint32_t)(nbhd & 0x1FF) << 16)
+         | ((uint32_t)(uint8_t)(dx + 15) << 8)
+         |  (uint32_t)(uint8_t)(dy + 15);
+}
+
+void bugs_g_activity_update(void)
+{
+    if (!gact_keys) return;
+    for (int i = 0; i < gact_cap; i++)
+        if (gact_keys[i] != ACT_EMPTY)
+            gact_vals[i].pop_count = 0;
+
+    for (int i = 0; i < n_alive; i++) {
+        bug_t *b = &bug_pool[alive_ids[i]];
+        int nbhd = neighborhood_gene(b->x, b->y);
+        gene_t  g = b->genome.genes[nbhd];
+        uint32_t key = g_pair_key(nbhd, g.dx, g.dy);
+        act_entry_t *e = gact_find_or_insert(key, hash_to_color(mix32(key)));
+        e->pop_count++;
+        e->activity++;
+    }
+
+    if (gact_cnt > 200000)
+        gact_compact((uint64_t)gact_ymax / 10);
+}
+
+void bugs_g_activity_render_col(int32_t *col, int height)
+{
+    for (int y = 0; y < height; y++)
+        col[y] = (int32_t)0xFF111111u;
+
+    if (!gact_keys || gact_cnt == 0) return;
+
+    uint64_t ymax = (uint64_t)gact_ymax;
+    uint32_t ypop[height];
+    memset(ypop, 0, (size_t)height * sizeof(uint32_t));
+
+    for (int i = 0; i < gact_cap; i++) {
+        if (gact_keys[i] == ACT_EMPTY) continue;
+        if (gact_vals[i].pop_count > 0) continue;
+        uint64_t act = gact_vals[i].activity;
+        int y = (height - 1) - (int)((uint64_t)(height - 1) * act / (act + ymax));
+        if (y < 0) y = 0;
+        if (y >= height) y = height - 1;
+        uint32_t c = (uint32_t)gact_vals[i].color;
+        uint8_t r = (uint8_t)(((c >> 16) & 0xFF) * 15 / 100);
+        uint8_t g = (uint8_t)(((c >>  8) & 0xFF) * 15 / 100);
+        uint8_t b = (uint8_t)(( c        & 0xFF) * 15 / 100);
+        col[y] = (int32_t)(0xFF000000u | ((uint32_t)r << 16)
+                          | ((uint32_t)g << 8) | b);
+    }
+
+    for (int i = 0; i < gact_cap; i++) {
+        if (gact_keys[i] == ACT_EMPTY) continue;
+        uint32_t pop = gact_vals[i].pop_count;
+        if (pop == 0) continue;
+        uint64_t act = gact_vals[i].activity;
+        int y = (height - 1) - (int)((uint64_t)(height - 1) * act / (act + ymax));
+        if (y < 0) y = 0;
+        if (y >= height) y = height - 1;
+        if (pop >= ypop[y]) {
+            col[y] = gact_vals[i].color;
+            ypop[y] = pop;
+        }
+    }
+}
+
+int bugs_g_activity_get(uint32_t *keys, uint64_t *activities,
+                        uint32_t *pop_counts, int32_t *colors, int max_n)
+{
+    int n = 0;
+    if (!gact_keys) return 0;
+    for (int i = 0; i < gact_cap && n < max_n; i++) {
+        if (gact_keys[i] == ACT_EMPTY) continue;
+        keys[n]       = gact_keys[i];
+        activities[n] = gact_vals[i].activity;
+        pop_counts[n] = gact_vals[i].pop_count;
+        colors[n]     = gact_vals[i].color;
+        n++;
+    }
+    return n;
+}
+
+void bugs_gq_activity_deciles(float *deciles_out)
+{
+    if (!gact_keys || gact_cnt == 0) {
+        for (int i = 0; i < 9; i++) deciles_out[i] = 0.0f;
+        return;
+    }
+    int D = 0;
+    for (int i = 0; i < gact_cap; i++)
+        if (gact_keys[i] != ACT_EMPTY && gact_vals[i].pop_count > 0)
+            D++;
+    if (D == 0) {
+        for (int i = 0; i < 9; i++) deciles_out[i] = 0.0f;
+        return;
+    }
+    float *buf = (float *)malloc((size_t)D * sizeof(float));
+    if (!buf) {
+        for (int i = 0; i < 9; i++) deciles_out[i] = 0.0f;
+        return;
+    }
+    int n = 0;
+    float inv_D = 1.0f / (float)D;
+    for (int i = 0; i < gact_cap; i++) {
+        if (gact_keys[i] == ACT_EMPTY || gact_vals[i].pop_count == 0) continue;
+        buf[n++] = (float)gact_vals[i].activity * inv_D;
     }
     qsort(buf, (size_t)n, sizeof(float), _float_cmp);
     for (int d = 0; d < 9; d++) {

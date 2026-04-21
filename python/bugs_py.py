@@ -170,7 +170,8 @@ class Bugs:
                                                 ctypes.c_int]
         L.bugs_colorize.restype              = None
 
-        # Activity probe
+        # G-activity probe (per whole-genome content hash; C symbol
+        # names retain their historical "activity" spelling)
         L.bugs_activity_update.argtypes      = []
         L.bugs_activity_update.restype       = None
         L.bugs_activity_render_col.argtypes  = [ctypes.POINTER(ctypes.c_int32),
@@ -188,9 +189,31 @@ class Bugs:
         L.bugs_get_act_ymax.argtypes         = []
         L.bugs_get_act_ymax.restype          = ctypes.c_int
 
-        # q_activity deciles
+        # Gq-activity deciles
         L.bugs_q_activity_deciles.argtypes   = [ctypes.POINTER(ctypes.c_float)]
         L.bugs_q_activity_deciles.restype    = None
+
+        # g-activity probe (per (input nbhd, output move) pair)
+        L.bugs_g_activity_update.argtypes    = []
+        L.bugs_g_activity_update.restype     = None
+        L.bugs_g_activity_render_col.argtypes = [ctypes.POINTER(ctypes.c_int32),
+                                                 ctypes.c_int]
+        L.bugs_g_activity_render_col.restype = None
+        L.bugs_g_activity_get.argtypes       = [
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_int32),
+            ctypes.c_int]
+        L.bugs_g_activity_get.restype        = ctypes.c_int
+        L.bugs_set_g_act_ymax.argtypes       = [ctypes.c_int]
+        L.bugs_set_g_act_ymax.restype        = None
+        L.bugs_get_g_act_ymax.argtypes       = []
+        L.bugs_get_g_act_ymax.restype        = ctypes.c_int
+
+        # gq-activity deciles
+        L.bugs_gq_activity_deciles.argtypes  = [ctypes.POINTER(ctypes.c_float)]
+        L.bugs_gq_activity_deciles.restype   = None
 
         # bug-coloring: per-LUT-index 31x31 move histogram
         L.bugs_bug_coloring_hist.argtypes    = [ctypes.c_int,
@@ -255,8 +278,11 @@ class Bugs:
     update_gdiff             = _make_updater("gdiff", is_int=True)
     del _make_updater
 
-    def update_act_ymax(self, y):
+    def update_G_act_ymax(self, y):
         self._lib.bugs_set_act_ymax(int(y))
+
+    def update_g_act_ymax(self, y):
+        self._lib.bugs_set_g_act_ymax(int(y))
 
     # ── Params export ─────────────────────────────────────────────────
 
@@ -414,13 +440,14 @@ class Bugs:
         """Σ F(x) over the grid."""
         return float(self._lib.bugs_get_food_env())
 
-    # ── Activity probe ────────────────────────────────────────────────
+    # ── G-activity probe (per whole-genome content hash) ──────────────
 
-    def activity_update(self):
+    def G_activity_update(self):
         self._lib.bugs_activity_update()
 
-    def get_activity(self, max_n=4096):
-        """Return activity table as dict of numpy arrays."""
+    def get_G_activity(self, max_n=4096):
+        """Return G-activity table as dict of numpy arrays.
+        Keys are FNV-1a hashes of the 512-gene genome bytes."""
         keys = np.zeros(max_n, dtype=np.uint32)
         acts = np.zeros(max_n, dtype=np.uint64)
         pops = np.zeros(max_n, dtype=np.uint32)
@@ -434,10 +461,38 @@ class Bugs:
         return {'hash': keys[:n], 'activity': acts[:n],
                 'pop_count': pops[:n], 'color': cols[:n]}
 
-    def q_activity_deciles(self):
-        """Return 9-element float array with activity deciles p10..p90."""
+    def Gq_activity_deciles(self):
+        """Return 9-element float array with G-activity deciles p10..p90."""
         out = np.zeros(9, dtype=np.float32)
         self._lib.bugs_q_activity_deciles(
+            out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
+        return out
+
+    # ── g-activity probe (per (input, output) LUT-slot pair) ──────────
+
+    def g_activity_update(self):
+        self._lib.bugs_g_activity_update()
+
+    def get_g_activity(self, max_n=8192):
+        """Return g-activity table as dict of numpy arrays.
+        Keys pack (nbhd, dx, dy) — see bugs.h for layout."""
+        keys = np.zeros(max_n, dtype=np.uint32)
+        acts = np.zeros(max_n, dtype=np.uint64)
+        pops = np.zeros(max_n, dtype=np.uint32)
+        cols = np.zeros(max_n, dtype=np.int32)
+        n = self._lib.bugs_g_activity_get(
+            keys.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+            acts.ctypes.data_as(ctypes.POINTER(ctypes.c_uint64)),
+            pops.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+            cols.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+            max_n)
+        return {'key': keys[:n], 'activity': acts[:n],
+                'pop_count': pops[:n], 'color': cols[:n]}
+
+    def gq_activity_deciles(self):
+        """Return 9-element float array with g-activity deciles p10..p90."""
+        out = np.zeros(9, dtype=np.float32)
+        self._lib.bugs_gq_activity_deciles(
             out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
         return out
 
@@ -496,8 +551,16 @@ class Bugs:
 
 # ── Recipe import ─────────────────────────────────────────────────────
 
-def import_run(filepath=None, recipe='init', lib_path=None):
+def import_run(filepath=None, recipe='final', lib_path=None):
     """Load a .bugs recipe file and return (sim, display_kwargs).
+
+    `recipe='final'` (default) starts the new sim from the metaparams that
+    were live at the moment of export — i.e. the explored state the user
+    chose to preserve. `recipe='init'` starts from the metaparams the
+    original run itself was initialized with (the t=0 snapshot). Either way,
+    the seed population is re-generated from `initialization`, so full
+    trajectory reproducibility is approximate; the recipe captures the
+    parameter regime, not the history of slider drags.
 
     If called with no arguments, lists available recipes in Runs/.
     """
@@ -530,7 +593,20 @@ def import_run(filepath=None, recipe='init', lib_path=None):
             f"nbhd='{NBHD}' (n_genes={N_GENES}). Recipes are not transferable "
             f"across neighborhood topologies — genome structure differs.")
 
-    mp = data['metaparams_init'] if recipe == 'init' else data['metaparams_final']
+    mp_init  = data['metaparams_init']
+    mp_final = data['metaparams_final']
+    mp = mp_init if recipe == 'init' else mp_final
+
+    # Show the init→final delta so the user knows which regime they're
+    # loading. Only show keys that actually changed during exploration.
+    deltas = {k: (mp_init.get(k), mp_final.get(k))
+              for k in set(mp_init) | set(mp_final)
+              if mp_init.get(k) != mp_final.get(k)}
+    if deltas:
+        arrow = "  (using final)" if recipe == 'final' else "  (using init)"
+        print(f"recipe {Path(filepath).name}: explored params{arrow}")
+        for k, (vi, vf) in sorted(deltas.items()):
+            print(f"    {k:20s}  init={vi!r}  →  final={vf!r}")
 
     sim = Bugs(lib_path=lib_path)
     sim.init(data['N'], **mp)
@@ -543,6 +619,14 @@ def import_run(filepath=None, recipe='init', lib_path=None):
     if disp.get('colormode', 0) != 0:
         display_kwargs['colormode'] = disp['colormode']
     if disp.get('probes'):
-        display_kwargs['probes'] = disp['probes']
+        # Migrate legacy probe keys: 'activity' → 'G-activity',
+        # 'q_activity' → 'Gq-activity'. (Old recipes predate the
+        # G/g split introduced 2026-04.)
+        probes = dict(disp['probes'])
+        if 'activity' in probes:
+            probes['G-activity'] = probes.pop('activity')
+        if 'q_activity' in probes:
+            probes['Gq-activity'] = probes.pop('q_activity')
+        display_kwargs['probes'] = probes
 
     return sim, display_kwargs

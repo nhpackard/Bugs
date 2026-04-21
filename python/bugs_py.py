@@ -90,6 +90,7 @@ class Bugs:
         food_inc=0.01,
         food_threshold=0.1,
         gdiff=0,
+        move_range=15,
     )
 
     def __init__(self, lib_path=None):
@@ -123,6 +124,10 @@ class Bugs:
         L.bugs_set_gdiff.restype             = None
         L.bugs_get_gdiff.argtypes            = []
         L.bugs_get_gdiff.restype             = ctypes.c_int
+        L.bugs_set_move_range.argtypes       = [ctypes.c_int]
+        L.bugs_set_move_range.restype        = None
+        L.bugs_get_move_range.argtypes       = []
+        L.bugs_get_move_range.restype        = ctypes.c_int
 
         # Food field setup
         L.bugs_set_food_source.argtypes      = [ctypes.POINTER(ctypes.c_float)]
@@ -276,6 +281,7 @@ class Bugs:
     update_food_inc          = _make_updater("food_inc")
     update_food_threshold    = _make_updater("food_threshold")
     update_gdiff             = _make_updater("gdiff", is_int=True)
+    update_move_range        = _make_updater("move_range", is_int=True)
     del _make_updater
 
     def update_G_act_ymax(self, y):

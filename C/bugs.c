@@ -68,6 +68,7 @@ static float g_initial_food     = 10.0f;
 static float g_food_inc         = 0.01f;
 static float g_food_threshold   = 0.1f;
 static int   g_gdiff            = 0;
+static int   g_move_range       = MAG_MAX;  /* 1..MAG_MAX; caps random_gene magnitude */
 
 /* lattice fields */
 static float   *F_food   = NULL;   /* [N*N] live food */
@@ -133,11 +134,13 @@ static inline int gidx(int x, int y) { return wrap(y, gN) * gN + wrap(x, gN); }
 
 /* ── Gene generation / mutation ────────────────────────────────────── */
 
-/* Random gene: uniform over {1..15} magnitude × {0..3} quadrant × {0..1} diagonal. */
+/* Random gene: uniform over {1..g_move_range} magnitude × {0..3} quadrant × {0..1} diagonal.
+ * g_move_range=1 collapses the move space to the 8 Moore neighbors;
+ * g_move_range=MAG_MAX (15) is the full 8×15 = 120-move space. */
 static gene_t random_gene(void)
 {
     gene_t g;
-    int mag  = rng_int(MAG_MAX) + 1;    /* 1..15 */
+    int mag  = rng_int(g_move_range) + 1;  /* 1..g_move_range */
     int diag = rng_int(2);              /* 0 or 1 */
     int quad = rng_int(4);              /* 0..3 */
     switch (quad) {
@@ -251,6 +254,12 @@ void bugs_set_initial_food(float f)      { g_initial_food     = f; }
 void bugs_set_food_inc(float i)          { g_food_inc         = i; }
 void bugs_set_food_threshold(float t)    { g_food_threshold   = t; }
 void bugs_set_gdiff(int d)               { g_gdiff            = d; }
+void bugs_set_move_range(int r)
+{
+    if (r < 1)        r = 1;
+    if (r > MAG_MAX)  r = MAG_MAX;
+    g_move_range = r;
+}
 
 float bugs_get_mutation_rate(void)     { return g_mutation_rate; }
 float bugs_get_reproduction_food(void) { return g_reproduction_food; }
@@ -260,6 +269,7 @@ float bugs_get_initial_food(void)      { return g_initial_food; }
 float bugs_get_food_inc(void)          { return g_food_inc; }
 float bugs_get_food_threshold(void)    { return g_food_threshold; }
 int   bugs_get_gdiff(void)             { return g_gdiff; }
+int   bugs_get_move_range(void)        { return g_move_range; }
 
 /* ── Food field setup ──────────────────────────────────────────────── */
 

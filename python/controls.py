@@ -372,6 +372,11 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
         description="gdiff:",
         style={"description_width": "120px"},
         layout=widgets.Layout(width="440px"))
+    sl_move_range = widgets.IntSlider(
+        value=sim.move_range, min=1, max=15, step=1,
+        description="move_range:",
+        style={"description_width": "120px"},
+        layout=widgets.Layout(width="440px"))
 
     # ── ymax halve / double buttons ──────────────────────────────────
     def _make_ymax_btns(name, initial, update_fn):
@@ -447,7 +452,7 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
                       txt_descriptor, btn_export]),
         sl_mutation_rate, sl_reproduction_food,
         sl_movement_cost, sl_eat_amount, sl_initial_food,
-        sl_food_inc, sl_food_threshold, sl_gdiff,
+        sl_food_inc, sl_food_threshold, sl_gdiff, sl_move_range,
     ]
     if _ymax_btns:
         _rows.append(widgets.HBox(_ymax_btns))
@@ -674,6 +679,7 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
     _make_slider_cb("food_inc",          sl_food_inc)
     _make_slider_cb("food_threshold",    sl_food_threshold)
     _make_slider_cb("gdiff",             sl_gdiff)
+    _make_slider_cb("move_range",        sl_move_range)
 
     # ── Simulation thread ─────────────────────────────────────────
     def _sim_thread():

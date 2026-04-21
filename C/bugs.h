@@ -48,6 +48,8 @@ void bugs_set_initial_food(float f);         /* initial bug food */
 void bugs_set_food_inc(float i);             /* F(x) regenerates toward source */
 void bugs_set_food_threshold(float t);       /* F(x) > t → gene bit = 1 */
 void bugs_set_gdiff(int d);                  /* diffusion passes per tick */
+void bugs_set_move_range(int r);             /* 1..MAG_MAX: caps random_gene magnitude.
+                                              * 1 = Moore-neighbor moves only, MAG_MAX = full 8×15 space. */
 
 float bugs_get_mutation_rate(void);
 float bugs_get_reproduction_food(void);
@@ -57,6 +59,7 @@ float bugs_get_initial_food(void);
 float bugs_get_food_inc(void);
 float bugs_get_food_threshold(void);
 int   bugs_get_gdiff(void);
+int   bugs_get_move_range(void);
 
 /* ── Food field setup ──────────────────────────────────────────────── */
 

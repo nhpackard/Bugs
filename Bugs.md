@@ -88,6 +88,7 @@ sim.init(
     food_inc          = 0.01,
     food_threshold    = 0.1,
     gdiff             = 0,
+    move_range        = 15,
 )
 ```
 
@@ -270,6 +271,7 @@ on `Bugs` push changes to the C library without restarting.
 | `food_inc`          | 0.01    | 0 – 0.2        | Food regrown per cell per tick (additive, capped).   |
 | `food_threshold`    | 0.1     | 0 – 1          | `F > threshold` → gene bit set.                      |
 | `gdiff`             | 0       | 0 – 10         | Diffusion passes per tick on `F`.                    |
+| `move_range`        | 15      | 1 – 15         | Caps newly-drawn gene magnitudes to `1..move_range`. `1` = Moore‑neighbor moves only (8 outcomes); `15` = full 8×15 = 120‑move space. Affects gene generation; existing genes keep their magnitudes until mutated. |
 
 `food_inc` is additive (not proportional): at 0.01, a fully depleted cell
 takes 100 ticks to recover to `F_source = 1`. At low values bugs collapse

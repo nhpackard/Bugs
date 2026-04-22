@@ -544,7 +544,7 @@ the boundary via POSIX `multiprocessing.shared_memory` — no copying.
 
 ```python
 from python.bugs_py import plot_food_power_spectrum
-fig, info = plot_food_power_spectrum(sim, num_frames=50, step_each=2)
+fig, info = plot_food_power_spectrum(sim, num_frames=1, step_each=1)
 print(info['asymmetry'])   # (V - H) / (V + H), 0 = balanced
 ```
 
@@ -558,6 +558,22 @@ points to an axis-asymmetric bug in the update rule.
 
 Averaging over `num_frames` frames (with `step_each` ticks advanced
 between frames) damps per-frame noise.
+
+### Move-direction histogram
+
+```python
+from python.bugs_py import plot_move_direction_histogram
+fig, info = plot_move_direction_histogram(sim, num_frames=20)
+print(info['axis_asym'], info['diag_asym'])
+```
+
+Aggregates each live bug's current gene-output move into eight compass
+bins (E, NE, N, NW, W, SW, S, SE) from the `g-activity` table. `axis_asym
+= ((N+S) − (E+W)) / (axis total)` flags cardinal axis bias; `diag_asym =
+((NE+SW) − (NW+SE)) / (diagonal total)` flags diagonal bias. Both should
+be near 0 for an isotropic rule; a systematic non-zero mean across many
+seeds points at an asymmetric bug in the update rule itself, independent
+of the food field.
 
 ## Current limits
 

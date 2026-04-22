@@ -873,3 +873,115 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
         'asymmetry':    asym,
         'P_mean_2d':    P,
     }
+
+
+# Direction index convention matches bugs.c random_gene(): dir = (quad<<1)|diag.
+#   0:E, 1:NE, 2:N, 3:NW, 4:W, 5:SW, 6:S, 7:SE
+_DIR_NAMES  = ['E', 'NE', 'N', 'NW', 'W', 'SW', 'S', 'SE']
+_DIR_ANGLES = np.deg2rad([0, 45, 90, 135, 180, 225, 270, 315])
+
+
+def _dxdy_to_dir(sdx, sdy):
+    """Vectorized (sign(dx), sign(dy)) -> direction bin in [0..7], -1 if (0,0)."""
+    idx = np.full(sdx.shape, -1, dtype=np.int32)
+    idx[(sdx == +1) & (sdy ==  0)] = 0
+    idx[(sdx == +1) & (sdy == +1)] = 1
+    idx[(sdx ==  0) & (sdy == +1)] = 2
+    idx[(sdx == -1) & (sdy == +1)] = 3
+    idx[(sdx == -1) & (sdy ==  0)] = 4
+    idx[(sdx == -1) & (sdy == -1)] = 5
+    idx[(sdx ==  0) & (sdy == -1)] = 6
+    idx[(sdx == +1) & (sdy == -1)] = 7
+    return idx
+
+
+def plot_move_direction_histogram(sim, num_frames=1, step_each=1,
+                                  show=True, figsize=(11, 4)):
+    """Aggregate the direction of each live bug's gene-output move into an
+    8-bin histogram, accumulated over num_frames.
+
+    For an isotropic population the 8 bins should be statistically equal.
+    Systematic cardinal imbalance (E+W vs N+S) or diagonal imbalance
+    (NE+SW vs NW+SE) is a sign of axis-asymmetry in the update rule itself,
+    independent of the food field.
+
+    Data is drawn from the g-activity hash table, which records, per live
+    bug per call, the (nbhd, gene-dx, gene-dy) pair currently being used.
+    The function advances `sim` by (num_frames-1)*step_each ticks.
+
+    Returns
+    -------
+    (fig, info) : Figure, dict
+        info keys: 'hist' (int64[8]), 'axis_asym' ((N+S−E−W)/total, in
+        [-1,1]), 'diag_asym' ((NE+SW−NW−SE)/total).
+    """
+    import matplotlib.pyplot as plt
+
+    hist = np.zeros(8, dtype=np.int64)
+    for f in range(num_frames):
+        if f > 0:
+            for _ in range(step_each):
+                sim.step()
+        sim.g_activity_update()
+        d = sim.get_g_activity(max_n=200_000)
+        keys = d['key']; pops = d['pop_count']
+        if len(keys) == 0:
+            continue
+        # Only count buckets with pop_count > 0 (live usage this tick).
+        alive = pops > 0
+        if not alive.any():
+            continue
+        k = keys[alive]; p = pops[alive]
+        dx = ((k >> 8) & 0xFF).astype(np.int32) - 15
+        dy = ( k       & 0xFF).astype(np.int32) - 15
+        idx = _dxdy_to_dir(np.sign(dx), np.sign(dy))
+        ok = idx >= 0
+        if ok.any():
+            hist += np.bincount(idx[ok], weights=p[ok].astype(np.int64),
+                                minlength=8).astype(np.int64)
+
+    total = int(hist.sum())
+    E, NE, N, NW, W, SW, S, SE = [int(h) for h in hist]
+    axis_den = N + S + E + W
+    diag_den = NE + SW + NW + SE
+    axis_asym = ((N + S) - (E + W)) / axis_den if axis_den > 0 else 0.0
+    diag_asym = ((NE + SW) - (NW + SE)) / diag_den if diag_den > 0 else 0.0
+
+    fig, axes = plt.subplots(
+        1, 2, figsize=figsize,
+        subplot_kw={'projection': None})  # set per-axis below
+    # Left: bar chart ordered N, NE, E, SE, S, SW, W, NW (clockwise compass)
+    order = [2, 1, 0, 7, 6, 5, 4, 3]
+    names = [_DIR_NAMES[i] for i in order]
+    axes[0].bar(range(8), hist[order],
+                color=['#4b8bbe'] * 8, edgecolor='k')
+    if total > 0:
+        axes[0].axhline(total / 8, color='r', lw=1, ls='--',
+                        label=f'uniform ({total/8:.0f})')
+        axes[0].legend(fontsize=8, loc='lower right')
+    axes[0].set_xticks(range(8)); axes[0].set_xticklabels(names)
+    axes[0].set_ylabel('Σ bug·ticks')
+    axes[0].set_title(f'move-direction counts (n={total})')
+
+    # Right: polar bar chart — makes axis/diag symmetry visually obvious.
+    axes[1].remove()
+    axp = fig.add_subplot(1, 2, 2, projection='polar')
+    width = np.deg2rad(45)
+    axp.bar(_DIR_ANGLES, hist, width=width, bottom=0.0,
+            color='#4b8bbe', edgecolor='k', alpha=0.8, align='center')
+    axp.set_theta_zero_location('E')
+    axp.set_theta_direction(1)  # counter-clockwise (math convention)
+    axp.set_xticks(_DIR_ANGLES)
+    axp.set_xticklabels(_DIR_NAMES)
+    axp.set_title(f'axis asym={axis_asym:+.3f}  '
+                  f'diag asym={diag_asym:+.3f}', fontsize=10)
+
+    fig.tight_layout()
+    if not show:
+        plt.close(fig)
+    return fig, {
+        'hist':      hist,
+        'axis_asym': axis_asym,
+        'diag_asym': diag_asym,
+        'total':     total,
+    }

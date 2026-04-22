@@ -348,7 +348,7 @@ def main():
         elif arg.startswith("--coloring="):
             coloring_shm_name = arg[len("--coloring="):]
 
-    ACT_H = 2 * PROBE_H  # 256
+    ACT_H = 4 * PROBE_H  # 512
 
     print(f"Bugs SDL: starting  N={N} px={px}  "
           f"G-activity={bool(G_activity_shm_name)}  "

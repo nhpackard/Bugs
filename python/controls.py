@@ -132,7 +132,7 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None,
 
     # ── G-activity probe setup (per whole-genome content hash) ──────
     G_activity_enabled = bool((probes or {}).get('G-activity'))
-    ACT_H = 2 * PROBE_H  # 256 px tall
+    ACT_H = 4 * PROBE_H  # 512 px tall
     G_activity_shm     = None
     G_activity_cursor  = None
     G_activity_pixels  = None

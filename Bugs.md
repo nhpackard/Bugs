@@ -538,6 +538,27 @@ the boundary via POSIX `multiprocessing.shared_memory` — no copying.
 | 3     | fps × 10  | main → worker      |
 | 4     | paused    | main → worker      |
 
+## Diagnostics
+
+### Food-field 2D power spectrum
+
+```python
+from python.bugs_py import plot_food_power_spectrum
+fig, info = plot_food_power_spectrum(sim, num_frames=50, step_each=2)
+print(info['asymmetry'])   # (V - H) / (V + H), 0 = balanced
+```
+
+Draws three panels: the food field, its log-power spectrum (fftshifted,
+DC removed), and horizontal/vertical axis cuts overlaid. `asymmetry`
+compares power summed along `kx=0` (vertical in k-space, from y-varying
+features) vs `ky=0` (horizontal). For an isotropic process it should be
+near 0; evolved populations may break symmetry, but the *direction*
+should be random across seeds. Systematic sign bias across many runs
+points to an axis-asymmetric bug in the update rule.
+
+Averaging over `num_frames` frames (with `step_each` ticks advanced
+between frames) damps per-frame noise.
+
 ## Current limits
 
 - No bug‑level observation of other bugs (same as original — input is

@@ -769,3 +769,96 @@ def import_run(filepath=None, recipe='final', lib_path=None):
         display_kwargs['probes'] = probes
 
     return sim, display_kwargs
+
+
+# ── Diagnostics ──────────────────────────────────────────────────────
+
+def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
+                             subtract_mean=True, figsize=(13, 4)):
+    """Plot the 2D power spectrum of the food field and horizontal/vertical
+    cuts, as a symmetry diagnostic.
+
+    For an isotropic process the 2D power spectrum should look (statistically)
+    radially symmetric. A systematic excess along the kx-axis vs the ky-axis
+    — or vice versa — is a red flag: something in the simulation prefers one
+    cardinal direction over the other. Evolution *may* break symmetry, but
+    the direction in which it breaks should be random across runs.
+
+    Parameters
+    ----------
+    sim : Bugs
+    num_frames : int
+        Number of FFT frames to average. Averaging reduces noise in the
+        per-frame spectrum; 20–100 frames is usually enough to see a bias.
+    step_each : int
+        Sim ticks between captured frames. With num_frames=1 no stepping
+        happens.
+    subtract_mean : bool
+        Subtract F.mean() before FFT to kill the DC spike at (0,0), which
+        otherwise dominates log-display.
+    figsize : tuple
+
+    Returns
+    -------
+    (fig, info) : matplotlib Figure, dict of symmetry metrics.
+        info keys: 'P_horiz_axis' (sum along kx, ky=0), 'P_vert_axis' (sum
+        along ky, kx=0), 'asymmetry' ((V-H)/(V+H), 0=balanced), 'P_mean_2d'
+        (the averaged shifted power spectrum).
+    """
+    import matplotlib.pyplot as plt
+
+    N = sim.N
+    Nc = N // 2  # index of zero frequency after fftshift
+
+    P_acc = np.zeros((N, N), dtype=np.float64)
+    for f in range(num_frames):
+        if f > 0:
+            for _ in range(step_each):
+                sim.step()
+        F = sim.get_food_field().reshape(N, N).astype(np.float64)
+        if subtract_mean:
+            F = F - F.mean()
+        Fhat = np.fft.fft2(F)
+        P_acc += np.abs(Fhat) ** 2
+    P_acc /= num_frames
+    P = np.fft.fftshift(P_acc)
+
+    # Symmetry metrics — exclude the DC bin to avoid dominating the ratio.
+    horiz_axis = P[Nc, :].copy()          # ky=0, kx varying
+    vert_axis  = P[:, Nc].copy()          # kx=0, ky varying
+    horiz_axis[Nc] = 0.0
+    vert_axis [Nc] = 0.0
+    P_h = float(horiz_axis.sum())
+    P_v = float(vert_axis.sum())
+    denom = P_v + P_h
+    asym = (P_v - P_h) / denom if denom > 0 else 0.0
+
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+    F_disp = sim.get_food_field().reshape(N, N)
+    axes[0].imshow(F_disp, origin='lower', cmap='Greens', vmin=0, vmax=1)
+    axes[0].set_title(f'food field  (t={sim.get_step()})')
+    axes[0].set_xlabel('x'); axes[0].set_ylabel('y')
+
+    logP = np.log10(P + 1e-12)
+    axes[1].imshow(logP, origin='lower', cmap='magma',
+                   extent=[-Nc, Nc, -Nc, Nc])
+    axes[1].set_title(f'log$_{{10}}$ |F̂|²  (avg of {num_frames} frames)')
+    axes[1].set_xlabel('kx'); axes[1].set_ylabel('ky')
+    axes[1].axhline(0, color='cyan', lw=0.5, alpha=0.4)
+    axes[1].axvline(0, color='cyan', lw=0.5, alpha=0.4)
+
+    ks = np.arange(-Nc, N - Nc)
+    axes[2].semilogy(ks, P[Nc, :], label=f'ky=0 (horizontal)  Σ={P_h:.2e}')
+    axes[2].semilogy(ks, P[:, Nc], label=f'kx=0 (vertical)    Σ={P_v:.2e}')
+    axes[2].set_title(f'axis cuts  asym (V−H)/(V+H) = {asym:+.3f}')
+    axes[2].set_xlabel('k'); axes[2].set_ylabel('|F̂|²')
+    axes[2].legend(fontsize=8, loc='lower center')
+    axes[2].grid(alpha=0.3)
+
+    fig.tight_layout()
+    return fig, {
+        'P_horiz_axis': P_h,
+        'P_vert_axis':  P_v,
+        'asymmetry':    asym,
+        'P_mean_2d':    P,
+    }

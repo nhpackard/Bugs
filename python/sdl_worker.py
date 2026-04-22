@@ -228,6 +228,28 @@ def _render_ts(dst, trace_bufs, cursor, global_max):
     return global_max
 
 
+def _draw_egenome_template(dst):
+    """Draw a 3x3 Moore-neighborhood legend in the upper-left corner of the
+    egenome probe, styled like the coloring probe template: cells colored
+    to match the 9 position traces in reading order
+    [NW N NE / W C E / SW S SE]."""
+    import numpy as np
+
+    def _pack(r, g, b):
+        v = (0xFF000000 | (r << 16) | (g << 8) | b) & 0xFFFFFFFF
+        return np.int32(v - 0x100000000) if v >= 0x80000000 else np.int32(v)
+
+    pad  = 4
+    cell = 10
+    for p in range(9):
+        col_ = p % 3
+        row  = p // 3
+        x0 = pad + col_ * cell
+        y0 = pad + row  * cell
+        cr, cg, cb = _EG_RGB[p]
+        dst[y0:y0 + cell - 2, x0:x0 + cell - 2] = _pack(cr, cg, cb)
+
+
 def _render_egenome(dst, means, stds, cursor):
     """Render the egenome probe: 9 translucent position bands over linear
     Y axis in [0, 1]. For each position p, a filled band extends from
@@ -309,6 +331,9 @@ def _render_egenome(dst, means, stds, cursor):
     argb = (0xFF000000 | (r << 16) | (g << 8) | b).astype(np.int64)
     argb = np.where(argb < 0x80000000, argb, argb - 0x100000000).astype(np.int32)
     dst[:PROBE_H, :PROBE_W] = argb
+
+    # 3x3 Moore-neighborhood legend in upper-left.
+    _draw_egenome_template(dst)
 
     # Cursor marker
     dst[:PROBE_H, PROBE_W - 1] = CURSOR_COLOR

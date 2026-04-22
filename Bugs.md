@@ -475,7 +475,7 @@ it.)
 | Widget        | Action                                                              |
 |---------------|---------------------------------------------------------------------|
 | Run / Pause   | Toggle simulation loop.                                             |
-| Restart       | Re‑init C lib with current metaparams, re‑run saved `state()`, t=0. |
+| Restart       | Re‑init C lib with current slider metaparams, re‑run the original `state()`, t=0. |
 | Step          | Single tick when paused.                                            |
 | Quit          | Tear down SDL window and shared memory.                             |
 | Save Plots    | Write `probe_*.png` in cwd for any scalar probes active.            |
@@ -486,6 +486,16 @@ it.)
 
 Sliders auto‑pause on touch and auto‑resume 200 ms after the last change, so
 you can drag without the sim running away.
+
+**Restart semantics.** Metaparams bound to sliders (`mutation_rate`,
+`reproduction_food`, `movement_cost`, `eat_amount`, `initial_food`, `food_inc`,
+`mu_egenome`, `gdiff`, `move_range`) are pushed into the re‑initialized C core
+at their *current* slider values — so any tweaks you made persist across a
+restart. Seeding and field setup (`seed_density`, `food_source`,
+`food_source_value`, `egenome_init`) revert to the arguments of the *original*
+`sim.state(...)` call, since those aren't slider‑backed. Net effect: restart
+reseeds the same spatial/genomic initial conditions under whatever
+metaparameter knobs you've dialed in.
 
 ## Architecture
 

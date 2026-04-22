@@ -1129,6 +1129,22 @@ void bugs_egenome_stats(float *mean_out, float *std_out)
     if (std_out)  for (int p = 0; p < EGENOME_N; p++) std_out[p]  = sqrtf(var[p]);
 }
 
+/* Copy all alive bugs' egenomes into out as a contiguous (pop, EGENOME_N)
+ * array. out must hold at least max_pop*EGENOME_N floats. Returns the
+ * number of rows written (min(n_alive, max_pop)). */
+int bugs_get_egenome_all(float *out, int max_pop)
+{
+    if (!out || max_pop <= 0) return 0;
+    int n = n_alive < max_pop ? n_alive : max_pop;
+    for (int i = 0; i < n; i++) {
+        const float *e = bug_pool[alive_ids[i]].egenome;
+        for (int p = 0; p < EGENOME_N; p++) {
+            out[(size_t)i * EGENOME_N + p] = e[p];
+        }
+    }
+    return n;
+}
+
 /* ── Colorize ──────────────────────────────────────────────────────── */
 
 static inline int32_t mk_argb(uint8_t r, uint8_t g, uint8_t b)
@@ -1164,6 +1180,13 @@ void bugs_colorize(int32_t *pixels, int colormode)
             if (f > 1.0f) f = 1.0f;
             uint8_t v = (uint8_t)(f * 255.0f);
             c = mk_argb(v, v, v);
+        } else if (colormode == 3) {
+            /* bug-age: saturating cool→hot gradient. v = age/(age+tau) */
+            float v = (float)b->age / (float)(b->age + 50);
+            uint8_t R = (uint8_t)(80.0f  + 175.0f * v);
+            uint8_t G = (uint8_t)(60.0f  + 560.0f * v * (1.0f - v));
+            uint8_t B = (uint8_t)(40.0f  + 180.0f * (1.0f - v));
+            c = mk_argb(R, G, B);
         } else {
             /* default: red dot */
             c = mk_argb(255, 60, 60);

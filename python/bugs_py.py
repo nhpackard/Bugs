@@ -173,6 +173,9 @@ class Bugs:
         L.bugs_egenome_stats.argtypes        = [ctypes.POINTER(ctypes.c_float),
                                                 ctypes.POINTER(ctypes.c_float)]
         L.bugs_egenome_stats.restype         = None
+        L.bugs_get_egenome_all.argtypes      = [ctypes.POINTER(ctypes.c_float),
+                                                ctypes.c_int]
+        L.bugs_get_egenome_all.restype       = ctypes.c_int
 
         # Food field setup
         L.bugs_set_food_source.argtypes      = [ctypes.POINTER(ctypes.c_float)]
@@ -430,6 +433,17 @@ class Bugs:
             mean.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
             std.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
         return mean, std
+
+    def get_egenome(self):
+        """Return the current egenome of every live bug as a (pop, 9) float32
+        ndarray. Column order is [NW, N, NE, W, C, E, SW, S, SE]."""
+        pop = self.get_population()
+        out = np.zeros((pop, EGENOME_N), dtype=np.float32)
+        if pop == 0:
+            return out
+        n = self._lib.bugs_get_egenome_all(
+            out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), pop)
+        return out[:n]
 
     def state(self, food_source='uniform', food_source_value=1.0,
               food_source_thresh=0.5, brightness=None,
@@ -984,4 +998,98 @@ def plot_move_direction_histogram(sim, num_frames=1, step_each=1,
         'axis_asym': axis_asym,
         'diag_asym': diag_asym,
         'total':     total,
+    }
+
+
+# Egenome position indexing:  [NW, N, NE, W, C, E, SW, S, SE] → 0..8
+_EG_ORBIT_EDGES   = [1, 3, 5, 7]   # N, W, E, S
+_EG_ORBIT_CORNERS = [0, 2, 6, 8]   # NW, NE, SW, SE
+_EG_POS_NAMES     = ['NW', 'N', 'NE', 'W', 'C', 'E', 'SW', 'S', 'SE']
+
+
+def plot_egenome_orbit_sweep(init, state, *, seeds, steps,
+                             show=True, figsize=(12, 4)):
+    """Multi-seed sweep of egenome per-position means at a fixed long-run step.
+
+    Under an isotropic rule + food, the fitness landscape has D4 symmetry,
+    so the population mean should respect three orbits: four edges
+    {N, W, E, S}, four corners {NW, NE, SW, SE}, and center {C}. A single
+    long-run seed can break symmetry via lineage dominance — the test is
+    whether per-orbit spread averages to zero across many seeds, i.e.
+    the 'winning' direction flips seed-to-seed.
+
+    Parameters
+    ----------
+    init   : dict of kwargs for sim.init(**init)
+    state  : dict of kwargs for sim.state(**state)
+    seeds  : iterable of int seeds
+    steps  : int, simulation steps per seed before reading egenome_stats
+
+    Returns
+    -------
+    (fig, info) : Figure, dict
+        info keys: 'means' (n_seeds,9), 'edge_spread' (n_seeds,) max−min
+        within edges, 'corner_spread' (n_seeds,) max−min within corners,
+        'across_mean' (9,), 'across_std' (9,).
+    """
+    import matplotlib.pyplot as plt
+
+    seeds = list(seeds)
+    n = len(seeds)
+    means = np.zeros((n, EGENOME_N), dtype=np.float32)
+    for i, k in enumerate(seeds):
+        sim = Bugs()
+        sim.init(**init)
+        sim.set_seed(int(k))
+        sim.state(**state)
+        for _ in range(int(steps)):
+            sim.step()
+        m, _ = sim.egenome_stats()
+        means[i] = m
+        sim.free()
+
+    edges   = means[:, _EG_ORBIT_EDGES]
+    corners = means[:, _EG_ORBIT_CORNERS]
+    edge_spread   = edges  .max(axis=1) - edges  .min(axis=1)
+    corner_spread = corners.max(axis=1) - corners.min(axis=1)
+    across_mean   = means.mean(axis=0)
+    across_std    = means.std (axis=0)
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+
+    # Left: parallel coordinates — one line per seed, across-seed mean overlaid
+    ax = axes[0]
+    xs = np.arange(EGENOME_N)
+    for i in range(n):
+        ax.plot(xs, means[i], marker='o', ms=4, alpha=0.55, lw=1)
+    ax.errorbar(xs, across_mean, yerr=across_std, color='k', lw=2, ms=6,
+                marker='s', capsize=4, label='across-seed mean ± std',
+                zorder=10)
+    ax.set_xticks(xs); ax.set_xticklabels(_EG_POS_NAMES)
+    ax.set_xlabel('Moore position')
+    ax.set_ylabel('egenome mean')
+    ax.set_ylim(0, 1)
+    ax.set_title(f'per-seed egenome means  (n={n} seeds, {steps} steps)')
+    ax.legend(loc='best', fontsize=8)
+
+    # Right: per-seed within-orbit spread
+    ax = axes[1]
+    ax.scatter(edge_spread, corner_spread, s=45, c='#4b8bbe', edgecolors='k')
+    hi = max(float(edge_spread.max()), float(corner_spread.max()), 1e-3) * 1.1
+    ax.plot([0, hi], [0, hi], 'k--', alpha=0.3, lw=1)
+    ax.set_xlabel('edge spread  max−min of {N, W, E, S}')
+    ax.set_ylabel('corner spread  max−min of {NW, NE, SW, SE}')
+    ax.set_xlim(0, hi); ax.set_ylim(0, hi)
+    ax.set_title('per-seed within-orbit spread')
+    ax.set_aspect('equal')
+
+    fig.tight_layout()
+    if not show:
+        plt.close(fig)
+    return fig, {
+        'means':         means,
+        'edge_spread':   edge_spread,
+        'corner_spread': corner_spread,
+        'across_mean':   across_mean,
+        'across_std':    across_std,
     }

@@ -546,7 +546,7 @@ it.)
 | Save Plots    | Write `probe_*.png` in cwd for any scalar probes active.            |
 | descriptor    | Text used as the recipe filename.                                   |
 | Export        | Write a `.bugs` recipe file.                                        |
-| Color         | `red-bugs` / `genome-hash` / `bug-food`.                            |
+| Color         | `red-bugs` / `genome-hash` / `bug-food` / `bug-age` (default).       |
 | `<| name |>`  | Halve / double probe Y‑axis scale.                                  |
 
 Sliders auto‑pause on touch and auto‑resume 200 ms after the last change, so
@@ -608,6 +608,29 @@ points to an axis-asymmetric bug in the update rule.
 
 Averaging over `num_frames` frames (with `step_each` ticks advanced
 between frames) damps per-frame noise.
+
+### Egenome D4-orbit sweep
+
+```python
+from python.bugs_py import plot_egenome_orbit_sweep
+fig, info = plot_egenome_orbit_sweep(
+    init={'N': 128, 'mu_egenome': 0.02, 'mutation_rate': 0.01, 'food_inc': 0.05},
+    state={'food_source': 'uniform', 'food_source_value': 1.0, 'seed_density': 0.2},
+    seeds=range(8), steps=5000,
+)
+print(info['across_mean'])   # (9,) per-position mean across seeds
+print(info['edge_spread'])   # per-seed max−min within {N, W, E, S}
+```
+
+Runs one sim per seed from identical metaparams, steps each to the same
+tick, and records the per-position egenome mean. Left panel: parallel
+coordinates (one line per seed) with the across-seed mean±std overlaid.
+Right panel: per-seed within-orbit spread, edges vs. corners. Under an
+isotropic rule, the across-seed mean should be flat within each orbit —
+`{N, W, E, S}` should converge to one value, `{NW, NE, SW, SE}` to
+another, and `C` stands alone. Individual seeds can still break symmetry
+(lineage dominance), so look at the across-seed *mean*, not any single
+run.
 
 ### Move-direction histogram
 

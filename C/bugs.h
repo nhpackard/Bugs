@@ -110,12 +110,18 @@ uint8_t *bugs_get_bug_mask(void);       /* [N*N] 1 if a bug is on that cell */
  * Zero-filled when population is empty. */
 void bugs_egenome_stats(float *mean_out, float *std_out);
 
+/* Copy egenomes of all live bugs into out as a contiguous (pop, EGENOME_N)
+ * array. out must hold at least max_pop*EGENOME_N floats. Returns the
+ * number of rows actually written (min(pop, max_pop)). */
+int bugs_get_egenome_all(float *out, int max_pop);
+
 /* ── Colorize ──────────────────────────────────────────────────────── */
 
 /* Fill pixels[N*N] with ARGB int32.
  * colormode 0 : food field green + bugs red
  * colormode 1 : food field green + bugs hash-colored by genome
  * colormode 2 : food field green + bugs brightness-by-food
+ * colormode 3 : food field green + bugs cool→hot by age
  */
 void bugs_colorize(int32_t *pixels, int colormode);
 

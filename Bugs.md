@@ -242,6 +242,20 @@ while sim.get_step() < 500:
 # Now safe to read sim state in this cell.
 ```
 
+### Slow stepping from a notebook cell
+
+When a display session is attached, `run_with_controls` installs
+`sim.step_display(n=1, delay=0.0)` on the `Bugs` instance. With the sim
+paused (so the background sim thread isn't racing on C state), this
+steps `n` ticks while advancing the SDL window, the probe strip-charts,
+the step counter, and the status label — unlike a bare `sim.step()`
+loop which leaves the display frozen at the paused frame.
+
+```python
+# With the sim paused in the Run toggle:
+sim.step_display(200, delay=0.05)   # ~20 fps for visual inspection
+```
+
 ## Display scale
 
 `CELL_PX` in `bugs.h` defaults to 4 (screen pixels per simulation cell).  Set

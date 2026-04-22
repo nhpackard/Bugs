@@ -605,6 +605,32 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None,
             status_lbl.value = (
                 f"t={st['step_cnt']}  pop={sim.get_population()}  (paused)")
 
+    def _step_display(n=1, delay=0.0):
+        """Programmatic single-step loop that also advances the SDL window,
+        probes, and step counter. Requires the sim to be paused (otherwise
+        the background sim thread would race on C state)."""
+        if not _alive[0]:
+            raise RuntimeError("no display session attached")
+        if not st['paused']:
+            raise RuntimeError(
+                "sim.step_display() requires the sim paused "
+                "(click Pause, or set btn_pause.value=True)")
+        for _ in range(int(n)):
+            sim.step()
+            st['step_cnt'] += 1
+            ctrl[_STEP] = st['step_cnt']
+            sim.colorize(pixels, st['colormode'])
+            _record_probes()
+            sc = st['step_cnt']
+            status_lbl.value = (
+                f"t={sc}  pop={sim.get_population()}  (stepping)")
+            if delay > 0:
+                time.sleep(delay)
+        status_lbl.value = (
+            f"t={st['step_cnt']}  pop={sim.get_population()}  (paused)")
+
+    sim.step_display = _step_display
+
     def on_quit(_):
         st['running'] = False
         if _alive[0]:

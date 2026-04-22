@@ -603,37 +603,51 @@ void bugs_activity_render_col(int32_t *col, int height)
     if (!act_keys || act_cnt == 0) return;
 
     uint64_t ymax = (uint64_t)act_ymax;
+    /* Per-y-row winner: stable lexicographic priority (pop, activity, key)
+     * descending. Pop-first keeps live buckets above extinct at the same row;
+     * activity and key are tie-breakers that don't depend on hash-table slot
+     * order, so the rendered profile stays consistent across act_resize()
+     * events that reshuffle iteration order. */
     uint32_t ypop[height];
-    memset(ypop, 0, (size_t)height * sizeof(uint32_t));
-
-    /* Pass 1: extinct — dimmed */
-    for (int i = 0; i < act_cap; i++) {
-        if (act_keys[i] == ACT_EMPTY) continue;
-        if (act_vals[i].pop_count > 0) continue;
-        uint64_t act = act_vals[i].activity;
-        int y = (height - 1) - (int)((uint64_t)(height - 1) * act / (act + ymax));
-        if (y < 0) y = 0;
-        if (y >= height) y = height - 1;
-        uint32_t c = (uint32_t)act_vals[i].color;
-        uint8_t r = (uint8_t)(((c >> 16) & 0xFF) * 15 / 100);
-        uint8_t g = (uint8_t)(((c >>  8) & 0xFF) * 15 / 100);
-        uint8_t b = (uint8_t)(( c        & 0xFF) * 15 / 100);
-        col[y] = (int32_t)(0xFF000000u | ((uint32_t)r << 16)
-                          | ((uint32_t)g << 8) | b);
+    uint64_t yact[height];
+    uint32_t ykey[height];
+    uint32_t ycol[height];
+    for (int y = 0; y < height; y++) {
+        ypop[y] = 0; yact[y] = 0; ykey[y] = 0; ycol[y] = 0;
     }
 
-    /* Pass 2: alive — full color, higher pop wins */
     for (int i = 0; i < act_cap; i++) {
-        if (act_keys[i] == ACT_EMPTY) continue;
+        uint32_t key = act_keys[i];
+        if (key == ACT_EMPTY) continue;
         uint32_t pop = act_vals[i].pop_count;
-        if (pop == 0) continue;
         uint64_t act = act_vals[i].activity;
         int y = (height - 1) - (int)((uint64_t)(height - 1) * act / (act + ymax));
         if (y < 0) y = 0;
         if (y >= height) y = height - 1;
-        if (pop >= ypop[y]) {
-            col[y] = act_vals[i].color;
+        int better =
+            pop >  ypop[y] ||
+            (pop == ypop[y] && act >  yact[y]) ||
+            (pop == ypop[y] && act == yact[y] && key > ykey[y]);
+        if (better) {
             ypop[y] = pop;
+            yact[y] = act;
+            ykey[y] = key;
+            ycol[y] = (uint32_t)act_vals[i].color;
+        }
+    }
+
+    for (int y = 0; y < height; y++) {
+        if (ykey[y] == 0) continue;      /* no bucket mapped to this row */
+        uint32_t c = ycol[y];
+        if (ypop[y] == 0) {
+            /* extinct bucket — dimmed to 15% */
+            uint8_t r = (uint8_t)(((c >> 16) & 0xFF) * 15 / 100);
+            uint8_t g = (uint8_t)(((c >>  8) & 0xFF) * 15 / 100);
+            uint8_t b = (uint8_t)(( c        & 0xFF) * 15 / 100);
+            col[y] = (int32_t)(0xFF000000u | ((uint32_t)r << 16)
+                              | ((uint32_t)g << 8) | b);
+        } else {
+            col[y] = (int32_t)c;
         }
     }
 }
@@ -842,35 +856,47 @@ void bugs_g_activity_render_col(int32_t *col, int height)
     if (!gact_keys || gact_cnt == 0) return;
 
     uint64_t ymax = (uint64_t)gact_ymax;
+    /* Stable (pop, activity, key) lexicographic priority — see
+     * bugs_activity_render_col for rationale. */
     uint32_t ypop[height];
-    memset(ypop, 0, (size_t)height * sizeof(uint32_t));
-
-    for (int i = 0; i < gact_cap; i++) {
-        if (gact_keys[i] == ACT_EMPTY) continue;
-        if (gact_vals[i].pop_count > 0) continue;
-        uint64_t act = gact_vals[i].activity;
-        int y = (height - 1) - (int)((uint64_t)(height - 1) * act / (act + ymax));
-        if (y < 0) y = 0;
-        if (y >= height) y = height - 1;
-        uint32_t c = (uint32_t)gact_vals[i].color;
-        uint8_t r = (uint8_t)(((c >> 16) & 0xFF) * 15 / 100);
-        uint8_t g = (uint8_t)(((c >>  8) & 0xFF) * 15 / 100);
-        uint8_t b = (uint8_t)(( c        & 0xFF) * 15 / 100);
-        col[y] = (int32_t)(0xFF000000u | ((uint32_t)r << 16)
-                          | ((uint32_t)g << 8) | b);
+    uint64_t yact[height];
+    uint32_t ykey[height];
+    uint32_t ycol[height];
+    for (int y = 0; y < height; y++) {
+        ypop[y] = 0; yact[y] = 0; ykey[y] = 0; ycol[y] = 0;
     }
 
     for (int i = 0; i < gact_cap; i++) {
-        if (gact_keys[i] == ACT_EMPTY) continue;
+        uint32_t key = gact_keys[i];
+        if (key == ACT_EMPTY) continue;
         uint32_t pop = gact_vals[i].pop_count;
-        if (pop == 0) continue;
         uint64_t act = gact_vals[i].activity;
         int y = (height - 1) - (int)((uint64_t)(height - 1) * act / (act + ymax));
         if (y < 0) y = 0;
         if (y >= height) y = height - 1;
-        if (pop >= ypop[y]) {
-            col[y] = gact_vals[i].color;
+        int better =
+            pop >  ypop[y] ||
+            (pop == ypop[y] && act >  yact[y]) ||
+            (pop == ypop[y] && act == yact[y] && key > ykey[y]);
+        if (better) {
             ypop[y] = pop;
+            yact[y] = act;
+            ykey[y] = key;
+            ycol[y] = (uint32_t)gact_vals[i].color;
+        }
+    }
+
+    for (int y = 0; y < height; y++) {
+        if (ykey[y] == 0) continue;
+        uint32_t c = ycol[y];
+        if (ypop[y] == 0) {
+            uint8_t r = (uint8_t)(((c >> 16) & 0xFF) * 15 / 100);
+            uint8_t g = (uint8_t)(((c >>  8) & 0xFF) * 15 / 100);
+            uint8_t b = (uint8_t)(( c        & 0xFF) * 15 / 100);
+            col[y] = (int32_t)(0xFF000000u | ((uint32_t)r << 16)
+                              | ((uint32_t)g << 8) | b);
+        } else {
+            col[y] = (int32_t)c;
         }
     }
 }

@@ -218,6 +218,30 @@ The cell returns immediately; widgets render below it, an SDL2 window opens,
 and the simulation runs in a background thread. Call `sim.free()` in a later
 cell to tear everything down.
 
+### Fixed-duration runs
+
+Pass `max_steps=N` to have the sim thread auto-pause after exactly `N` steps.
+The SDL window and probe strip-charts stay open for inspection:
+
+```python
+run_with_controls(sim, paused=False, max_steps=500,
+                  probes={'G-activity': True, 'ts': True})
+# Sim runs for 500 steps in the background, then pauses.
+# Later cells can inspect sim.get_population(), sim.egenome_stats(), etc.
+# sim.free() when done.
+```
+
+To block the current cell until the run finishes (useful for publication-style
+notebooks where the next cell analyses the result):
+
+```python
+import time
+run_with_controls(sim, paused=False, max_steps=500, probes={...})
+while sim.get_step() < 500:
+    time.sleep(0.1)
+# Now safe to read sim state in this cell.
+```
+
 ## Display scale
 
 `CELL_PX` in `bugs.h` defaults to 4 (screen pixels per simulation cell).  Set
@@ -258,13 +282,25 @@ encodes one of 120 moves (8 directions × 15 magnitudes). Per tick:
 3. Bugs act in random order:
    - If `food ≤ 0`: die.
    - If `food > reproduction_food`: split — parent's `food /= 2`, child takes
-     the other half and is placed at the parent's cell.
+     the other half. Placement: see below.
    - Eat: `eat = min(eat_amount, F(cell))`; subtract `eat` from the cell, add
      to the bug. Food *is* consumed from the cell — unlike the Obj‑C original
      where the food bit was static.
    - Lose `movement_cost` (always applied, whether or not the bug ate — the
      Obj‑C original only charged it off‑food).
-   - Look up `genes[9-bit-neighborhood]`, move.
+   - Look up `genes[9-bit-neighborhood]`, move. Placement: see below.
+
+**Placement on birth and move** (`place_or_bump`). A new bug (child) or a
+moving bug starts with a target cell — parent's cell for a birth, or
+`(x + dx, y + dy)` for a move. If that cell is empty, it's taken. If it's
+occupied, the bug random-walks: each retry adds an i.i.d. offset
+`(Δx, Δy) ∈ {-1, 0, +1}²` (including `(0, 0)`) to the *current* target and
+checks again. Up to 64 iterations; coordinates wrap on the torus. If all
+64 misses, fall back to a row-major linear scan for the first free cell
+anywhere on the grid. Consequence: the gene-output move is a *preference* —
+if the target is blocked the bug drifts to a nearby empty cell rather than
+stalling. On a full grid a new child is dropped and the parent's split is
+undone.
 4. **Render.** `sim.colorize()` runs after phase 3, so the pixels you see are
    *post-eat* — but with this tick's regen (phase 1) already baked in. At
    `food_inc=1` the visible food field is therefore "F_source minus what the
@@ -580,8 +616,10 @@ of the food field.
 - No bug‑level observation of other bugs (same as original — input is
   food‑only).
 - "Stay" is not in the action alphabet — every bug moves each tick.
-- Pool resolution of conflicting placements is random Moore‑neighbor recursion
-  (bounded depth issues possible at extreme density).
+- Conflicting placements (birth or move into an occupied cell) are resolved
+  by a bounded random walk (64 Moore-neighbor tries, then a linear-scan
+  fallback); at extreme density the linear scan can put a bug arbitrarily
+  far from its intended target.
 - `set_seed()` seeds the C RNG but `numpy`/`random` in Python are not reset;
   fully reproducible runs require seeding both sides if either is used.
 - SDL2 main window closes the whole session (probe sub‑windows can be closed

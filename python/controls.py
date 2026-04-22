@@ -90,7 +90,8 @@ def available_probes():
 _active_stop = None
 
 
-def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
+def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None,
+                      max_steps=None):
     """
     Display ipywidgets controls and open an SDL2 simulation window.
 
@@ -104,6 +105,10 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
     colormode : initial colour mode (0=red-bugs, 1=genome-hash, 2=bug-food)
     paused    : if True, start in paused state
     probes    : dict of probe names to enable, e.g. {'activity': True, 'q_activity': True}
+    max_steps : if not None, auto-pause after this many simulation steps.
+                The SDL window and probes stay open for inspection; call
+                sim.free() when you're done.  For synchronous block-until-done
+                use, poll with `while sim.get_step() < max_steps: time.sleep(0.1)`.
 
     Returns
     -------
@@ -785,6 +790,13 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
                 if rc is not None:
                     print(f"Bugs: SDL worker exited early (rc={rc})", flush=True)
                     status_lbl.value = f"SDL worker crashed (rc={rc}) — check terminal"
+
+            if (max_steps is not None
+                    and st['step_cnt'] >= max_steps
+                    and not st['paused']):
+                _set_paused(True)
+                status_lbl.value = (f"t={st['step_cnt']}  "
+                                    f"reached max_steps={max_steps} — paused")
 
             if st['paused']:
                 sim.colorize(pixels, st['colormode'])

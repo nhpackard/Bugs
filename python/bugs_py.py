@@ -774,7 +774,8 @@ def import_run(filepath=None, recipe='final', lib_path=None):
 # ── Diagnostics ──────────────────────────────────────────────────────
 
 def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
-                             subtract_mean=True, figsize=(13, 4)):
+                             subtract_mean=True, show=True,
+                             figsize=(13, 4)):
     """Plot the 2D power spectrum of the food field and horizontal/vertical
     cuts, as a symmetry diagnostic.
 
@@ -796,6 +797,14 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
     subtract_mean : bool
         Subtract F.mean() before FFT to kill the DC spike at (0,0), which
         otherwise dominates log-display.
+    show : bool
+        If True (default), the figure is drawn inline by the Jupyter
+        auto-display mechanism. If False, the figure is detached from
+        pyplot's manager (plt.close(fig)) so it won't auto-show — useful
+        in a loop that accumulates many runs. The returned fig is still
+        live and can be redisplayed later with
+        `from IPython.display import display; display(fig)`
+        (matplotlib's `fig.show()` is a no-op under the inline backend).
     figsize : tuple
 
     Returns
@@ -856,6 +865,8 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
     axes[2].grid(alpha=0.3)
 
     fig.tight_layout()
+    if not show:
+        plt.close(fig)
     return fig, {
         'P_horiz_axis': P_h,
         'P_vert_axis':  P_v,

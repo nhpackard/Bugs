@@ -452,6 +452,17 @@ run_with_controls(sim, **display_kwargs)
 
 `import_run()` with no arguments lists available recipes.
 
+**Ndarray food sources (`brightness=<array>` or `food_source='custom'`)**
+can't live inside the JSON, so `export_recipe` writes each ndarray to a
+sidecar `.npy` file alongside the `.bugs` file — e.g.
+`2026-04-21_foo.bugs` + `2026-04-21_foo.brightness.npy`. The JSON holds
+a pointer `"brightness_npy": "2026-04-21_foo.brightness.npy"` which
+`import_run` resolves relative to the recipe's directory. Keep the
+sidecar next to the `.bugs` file when moving recipes around. String
+paths (`brightness='/path/to.png'`) and template names
+(`food_source='template', template='stripes'`) are stored directly in
+the JSON and need no sidecar.
+
 ### Recipe format v2
 
 Recipes now carry a `version` field, plus `nbhd` (e.g. `'moore'`) and

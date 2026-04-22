@@ -472,10 +472,14 @@ class Bugs:
                 self._state_params['brightness'] = brightness
             else:
                 self.set_food_source_from_brightness(brightness, food_source_thresh)
+                self._state_params['brightness'] = np.ascontiguousarray(
+                    np.asarray(brightness, dtype=np.float32))
         elif food_source == 'custom':
             if brightness is None:
                 raise ValueError("food_source='custom' requires src array")
             self.set_food_source(brightness)
+            self._state_params['brightness'] = np.ascontiguousarray(
+                np.asarray(brightness, dtype=np.float32))
         else:
             self.set_food_source_uniform(food_source_value)
         self.exterminate()
@@ -620,6 +624,21 @@ class Bugs:
 
         mp_final = {k: getattr(self, k) for k in self._DEFAULTS}
         mp_final['egenome_init'] = self.get_egenome_init().tolist()
+
+        # Serialize any ndarray state_params (e.g. brightness for
+        # food_source='brightness'/'custom') as .npy sidecars next to the
+        # .bugs file, and replace the entry with a `<key>_npy: filename`
+        # pointer. import_run resolves the pointer back into an ndarray.
+        init_params = dict(self._state_params)
+        basename = filename[:-len('.bugs')]
+        for key in list(init_params):
+            val = init_params[key]
+            if isinstance(val, np.ndarray):
+                sidecar_name = f"{basename}.{key}.npy"
+                np.save(os.path.join(runs_dir, sidecar_name), val)
+                del init_params[key]
+                init_params[f"{key}_npy"] = sidecar_name
+
         recipe = {
             'version': 3,
             'nbhd': NBHD,                     # 'moore' (9-bit) or 'von_neumann' (5-bit)
@@ -629,7 +648,7 @@ class Bugs:
             'N': self._N,
             'metaparams_init': dict(self._init_metaparams),
             'metaparams_final': mp_final,
-            'initialization': dict(self._state_params),
+            'initialization': init_params,
             'display': {
                 'colormode': colormode,
                 'probes': probes or {},
@@ -723,7 +742,16 @@ def import_run(filepath=None, recipe='final', lib_path=None):
     sim.init(data['N'], **mp)
 
     init_raw = data.get('initialization', {})
-    sim.state(**init_raw)
+    # Resolve `<key>_npy: filename` sidecar pointers back into ndarrays,
+    # loaded from the same directory as the recipe file.
+    recipe_dir = Path(filepath).parent
+    init_kwargs = {}
+    for key, val in init_raw.items():
+        if key.endswith('_npy') and isinstance(val, str):
+            init_kwargs[key[:-len('_npy')]] = np.load(recipe_dir / val)
+        else:
+            init_kwargs[key] = val
+    sim.state(**init_kwargs)
 
     disp = data.get('display', {})
     display_kwargs = {}

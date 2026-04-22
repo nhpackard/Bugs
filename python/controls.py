@@ -402,7 +402,7 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
         value=sim.initial_food, min=0.0, max=30.0, step=0.5,
         description="initial_food:", readout_format=".1f", **sl_kw)
     sl_food_inc = widgets.FloatSlider(
-        value=sim.food_inc, min=0.0, max=0.2, step=0.001,
+        value=sim.food_inc, min=0.0, max=1.0, step=0.005,
         description="food_inc:", readout_format=".3f", **sl_kw)
     sl_mu_egenome = widgets.FloatSlider(
         value=sim.mu_egenome, min=0.0, max=0.1, step=0.001,
@@ -417,6 +417,26 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None):
         description="move_range:",
         style={"description_width": "120px"},
         layout=widgets.Layout(width="440px"))
+
+    # ipywidgets silently clamps `value` to [min, max] at construction,
+    # *before* any observer fires — so an init value outside a slider's
+    # range leaves the C core and the slider disagreeing. Push each
+    # (possibly clamped) slider value back into sim so display and core
+    # stay consistent. Warn if a clamp actually happened.
+    for _attr, _sl in (("mutation_rate",     sl_mutation_rate),
+                       ("reproduction_food", sl_reproduction_food),
+                       ("movement_cost",     sl_movement_cost),
+                       ("eat_amount",        sl_eat_amount),
+                       ("initial_food",      sl_initial_food),
+                       ("food_inc",          sl_food_inc),
+                       ("mu_egenome",        sl_mu_egenome),
+                       ("gdiff",             sl_gdiff),
+                       ("move_range",        sl_move_range)):
+        _live = getattr(sim, _attr)
+        if _sl.value != _live:
+            print(f"[controls] {_attr}={_live!r} is outside the slider range "
+                  f"[{_sl.min}, {_sl.max}]; clamping to {_sl.value!r}.")
+            getattr(sim, f"update_{_attr}")(_sl.value)
 
     # ── ymax halve / double buttons ──────────────────────────────────
     def _make_ymax_btns(name, initial, update_fn):

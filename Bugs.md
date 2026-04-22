@@ -265,6 +265,10 @@ encodes one of 120 moves (8 directions × 15 magnitudes). Per tick:
    - Lose `movement_cost` (always applied, whether or not the bug ate — the
      Obj‑C original only charged it off‑food).
    - Look up `genes[9-bit-neighborhood]`, move.
+4. **Render.** `sim.colorize()` runs after phase 3, so the pixels you see are
+   *post-eat* — but with this tick's regen (phase 1) already baked in. At
+   `food_inc=1` the visible food field is therefore "F_source minus what the
+   bugs just grazed this tick," not the fully refilled field.
 
 See `../Docs/cocoabugs.md` §4–§5 for the reference semantics of the Obj‑C
 model and how this port diverges.
@@ -281,7 +285,7 @@ on `Bugs` push changes to the C library without restarting.
 | `movement_cost`     | 0.5     | 0 – 5          | Food subtracted per tick regardless of eating.       |
 | `eat_amount`        | 2.0     | 0 – 10         | Max food transferred from cell to bug per tick; actual = `min(eat_amount, F(cell))`. |
 | `initial_food`      | 10.0    | 0 – 30         | Food on each newly seeded bug.                       |
-| `food_inc`          | 0.01    | 0 – 0.2        | Food regrown per cell per tick (additive, capped).   |
+| `food_inc`          | 0.01    | 0 – 1.0        | Food regrown per cell per tick (additive, capped at `F_source`). At `food_inc ≥ 1` every cell snaps to `F_source` each tick — instant replenishment. |
 | `mu_egenome`        | 0.0     | 0 – 0.1        | σ of per‑entry truncated‑Gaussian drift applied to the child's egenome at birth. `0` = exact copy (no perception evolution). |
 | `gdiff`             | 0       | 0 – 10         | Diffusion passes per tick on `F`.                    |
 | `move_range`        | 15      | 1 – 15         | Caps newly-drawn gene magnitudes to `1..move_range`. `1` = Moore‑neighbor moves only (8 outcomes); `15` = full 8×15 = 120‑move space. Affects gene generation; existing genes keep their magnitudes until mutated. |

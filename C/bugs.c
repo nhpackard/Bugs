@@ -1270,8 +1270,11 @@ void bugs_colorize(int32_t *pixels, int colormode)
             uint8_t v = (uint8_t)(f * 255.0f);
             c = mk_argb(v, v, v);
         } else if (colormode == 3) {
-            /* bug-age: age/g_age_scale mapped to cool→hot gradient. */
-            float v = (float)((double)b->age / g_age_scale);
+            /* bug-age: log1p(age)/log1p(g_age_scale) → cool→hot gradient.
+             * Log spreads the gradient across the right-skewed age
+             * distribution so the bulk of the population occupies the
+             * middle of the colormap rather than hugging the blue end. */
+            float v = (float)(log1p((double)b->age) / log1p(g_age_scale));
             if (v < 0.0f) v = 0.0f;
             if (v > 1.0f) v = 1.0f;
             uint8_t R = (uint8_t)(80.0f  + 175.0f * v);

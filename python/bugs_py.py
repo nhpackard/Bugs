@@ -176,6 +176,9 @@ class Bugs:
         L.bugs_get_egenome_all.argtypes      = [ctypes.POINTER(ctypes.c_float),
                                                 ctypes.c_int]
         L.bugs_get_egenome_all.restype       = ctypes.c_int
+        L.bugs_get_ages.argtypes             = [ctypes.POINTER(ctypes.c_int32),
+                                                ctypes.c_int]
+        L.bugs_get_ages.restype              = ctypes.c_int
 
         # Food field setup
         L.bugs_set_food_source.argtypes      = [ctypes.POINTER(ctypes.c_float)]
@@ -449,6 +452,17 @@ class Bugs:
             return out
         n = self._lib.bugs_get_egenome_all(
             out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), pop)
+        return out[:n]
+
+    def get_ages(self):
+        """Return ages of every live bug as a (pop,) int32 ndarray,
+        in alive-order (the same order as get_egenome rows)."""
+        pop = self.get_population()
+        out = np.zeros(pop, dtype=np.int32)
+        if pop == 0:
+            return out
+        n = self._lib.bugs_get_ages(
+            out.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)), pop)
         return out[:n]
 
     def state(self, food_source='uniform', food_source_value=1.0,

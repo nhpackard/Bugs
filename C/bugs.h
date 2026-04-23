@@ -123,6 +123,10 @@ void bugs_egenome_stats(float *mean_out, float *std_out);
  * number of rows actually written (min(pop, max_pop)). */
 int bugs_get_egenome_all(float *out, int max_pop);
 
+/* Copy ages of all live bugs into out (one int32 per bug, in alive-order).
+ * out must hold at least max_pop int32s. Returns min(pop, max_pop). */
+int bugs_get_ages(int32_t *out, int max_pop);
+
 /* ── Colorize ──────────────────────────────────────────────────────── */
 
 /* Fill pixels[N*N] with ARGB int32.

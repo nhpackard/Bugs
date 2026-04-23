@@ -1210,6 +1210,16 @@ int bugs_get_egenome_all(float *out, int max_pop)
     return n;
 }
 
+int bugs_get_ages(int32_t *out, int max_pop)
+{
+    if (!out || max_pop <= 0) return 0;
+    int n = n_alive < max_pop ? n_alive : max_pop;
+    for (int i = 0; i < n; i++) {
+        out[i] = bug_pool[alive_ids[i]].age;
+    }
+    return n;
+}
+
 /* ── Colorize ──────────────────────────────────────────────────────── */
 
 static inline int32_t mk_argb(uint8_t r, uint8_t g, uint8_t b)

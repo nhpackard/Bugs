@@ -273,51 +273,63 @@ def _render_coloring(dst, hist, lut_idx):
 
 
 def _render_ts(dst, trace_bufs, cursor, global_max):
-    """Render scalar time-series as log-Y colored lines.
+    """Render scalar time-series with per-trace linear auto-scaling.
 
-    trace_bufs: list of float32[PROBE_W] arrays.
-    global_max: running max across the session (scales Y stably).
+    Each trace's observed [min, max] over the visible window maps to the
+    middle 80% of the strip height (10% padding top and bottom). Zero
+    samples are treated as "uninitialized / pop=0" and excluded from both
+    autoscale and plotting.
+
+    trace_bufs: list of float32[PROBE_W] ring buffers.
+    global_max: unused (kept for signature compatibility with caller).
     """
     import numpy as np
 
     dst[:PROBE_H, :PROBE_W] = BG_COLOR
 
-    rolled = [np.roll(b, -cursor) for b in trace_bufs]
-
-    # Pool all positive samples to fix log-Y range.
-    pos_samples = []
-    for r in rolled:
-        p = r[r > 0]
-        if len(p):
-            pos_samples.append(p)
-    if not pos_samples:
-        return global_max
-    cat = np.concatenate(pos_samples)
-    lo = float(cat.min())
-    hi = float(cat.max())
-    global_max = max(global_max, hi)
-    if lo <= 0:
-        lo = 1.0
-    hi = global_max
-    if hi <= lo:
-        hi = lo * 10.0
-    log_lo = math.log10(lo)
-    log_hi = math.log10(hi)
-    span = log_hi - log_lo
-    if span < 0.01:
-        span = 1.0
-    log_hi += span * 0.10
-    scale = (PROBE_H - 1) / (log_hi - log_lo)
-
     xs = np.arange(PROBE_W)
-    for ti, r in enumerate(rolled):
-        col = _TS_COLORS[ti % len(_TS_COLORS)]
+    y_top = 0.1 * (PROBE_H - 1)
+    y_bot = 0.9 * (PROBE_H - 1)
+    H_grid = np.arange(PROBE_H)[:, None]            # (H, 1)
+
+    for ti, b in enumerate(trace_bufs):
+        r = np.roll(b, -cursor)
         mask = r > 0
         if not mask.any():
             continue
-        lv = np.log10(r[mask])
-        ys = np.clip(((log_hi - lv) * scale).astype(int), 0, PROBE_H - 1)
-        dst[ys, xs[mask]] = col
+        vals = r[mask]
+        lo = float(vals.min())
+        hi = float(vals.max())
+        if hi <= lo:
+            ys_valid = np.full(int(mask.sum()),
+                               int((y_top + y_bot) * 0.5), dtype=np.int32)
+        else:
+            scale = (y_bot - y_top) / (hi - lo)
+            ys_valid = np.clip(
+                (y_bot - (vals - lo) * scale).astype(np.int32),
+                0, PROBE_H - 1)
+
+        # Scatter ys over the full x range; -1 marks invalid columns.
+        ys = np.full(PROBE_W, -1, dtype=np.int32)
+        ys[mask] = ys_valid
+
+        # Draw line segments: for each column x where both x-1 and x are
+        # valid, fill the vertical span between y[x-1] and y[x] so the
+        # trace reads as a connected line rather than sparse dots.
+        prev_ys = np.roll(ys, 1)
+        prev_ys[0] = -1
+        both = (ys >= 0) & (prev_ys >= 0)
+        y_lo = np.minimum(ys, prev_ys)
+        y_hi = np.maximum(ys, prev_ys)
+        fill = ((H_grid >= y_lo[None, :])
+                & (H_grid <= y_hi[None, :])
+                & both[None, :])
+
+        col = _TS_COLORS[ti % len(_TS_COLORS)]
+        dst[fill] = col
+        # Isolated points (neighbor invalid) still draw as a single pixel.
+        isolated = mask & ~both
+        dst[ys[isolated], xs[isolated]] = col
 
     dst[:PROBE_H, PROBE_W - 1] = CURSOR_COLOR
     _draw_ts_legend(dst)

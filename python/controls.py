@@ -83,9 +83,19 @@ _COLORING_LABELS = ['NW', 'N ', 'NE',
 # Histogram bins for per-LUT-index (dx, dy) outputs (range [-15, 15])
 _COLORING_HIST_N = 31 * 31
 
-# Time-series probe: trace names + render colors (ARGB)
-_TS_TRACES = ('population', 'food_bug')
-_TS_COLORS = (0xFF44DD44, 0xFFFFAA22)   # green, orange
+# Time-series probe: trace names + render colors (ARGB).
+# population     — alive bug count.
+# food_bug       — Σ food over alive bugs.
+# food_eaten_avg — food eaten per live bug this tick (reproductive-fitness proxy).
+# genome_div     — distinct genome_hash / population (whole-genome diversity, ∈[0,1]).
+# io_div         — distinct (nbhd, dx, dy) / population (in-use LUT-slot diversity).
+_TS_TRACES = ('population', 'food_bug', 'food_eaten_avg',
+              'genome_div', 'io_div')
+_TS_COLORS = (0xFF44DD44,   # population — green
+              0xFFFFAA22,   # food_bug   — orange
+              0xFFFFFF55,   # food_eaten_avg — yellow
+              0xFF55BBFF,   # genome_div — light blue
+              0xFFFF77CC)   # io_div     — pink
 _TS_N      = len(_TS_TRACES)
 
 
@@ -589,8 +599,17 @@ def run_with_controls(sim, cell_px=None, colormode=4, paused=True, probes=None,
             egenome_cursor[0] = (cur + 1) % EG_W
         if ts_enabled:
             ts_cur = int(ts_cursor[0])
-            ts_traces[0][ts_cur] = float(sim.get_population())
+            pop = sim.get_population()
+            ts_traces[0][ts_cur] = float(pop)
             ts_traces[1][ts_cur] = float(sim.get_food_bug())
+            if pop > 0:
+                ts_traces[2][ts_cur] = float(sim.get_food_eaten_last()) / pop
+                ts_traces[3][ts_cur] = sim.count_distinct_genomes() / pop
+                ts_traces[4][ts_cur] = sim.count_distinct_io_pairs() / pop
+            else:
+                ts_traces[2][ts_cur] = 0.0
+                ts_traces[3][ts_cur] = 0.0
+                ts_traces[4][ts_cur] = 0.0
             ts_cursor[0] = (ts_cur + 1) % PROBE_W
         if coloring_enabled:
             gi = int(coloring_idx[0])

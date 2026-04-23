@@ -451,10 +451,31 @@ palette is stable across runs.
 Scalar time‑series probe — multiple colored traces overlaid on one log‑Y
 scrolling chart, sharing the `PROBE_W` pixel width. Current traces:
 
-- `population` — alive bug count (green)
-- `food_bug`   — total food summed over alive bugs (orange)
+- `population`     — alive bug count (green)
+- `food_bug`       — total food summed over alive bugs (orange)
+- `food_eaten_avg` — food eaten by the whole population on the last step,
+  divided by that step's population. A per‑bug reproductive‑fitness proxy:
+  high values mean bugs are finding food fast enough to approach
+  `reproduction_food`, low values mean the population is starving. Backed
+  by a C‑side accumulator `bugs_get_food_eaten_last()` that is zeroed at
+  the top of each `bugs_step` and incremented by every successful eat.
+  (yellow)
+- `genome_div`     — distinct `genome_hash` values / population, in [0, 1].
+  1.0 means every bug has a unique whole‑genome content; values drop as
+  lineages fix clones. Computed from `bugs_count_distinct_genomes()`
+  (sort‑based unique count). (light blue)
+- `io_div`         — distinct `(current_nbhd, dx, dy)` input/output pairs /
+  population, in [0, 1]. Shares its key packing with the g‑activity probe,
+  so the space is the same ~64k possible keys. Tracks LUT‑slot diversity
+  *in actual use* this tick — much coarser than `genome_div` (two bugs
+  with different genomes often pick the same (nbhd, move) this tick).
+  Computed from `bugs_count_distinct_io_pairs()`. (pink)
 
-The Y‑scale is shared across traces and adjustable via the `<| ts |>` buttons.
+A legend is drawn in the upper‑left of the ts window: one row per trace,
+colored swatch + label. The text uses a 3×5 hand‑baked bitmap font defined
+in `python/sdl_worker.py` (no external font dependency). The Y‑scale is
+shared across traces; traces with different natural magnitudes (population
+≈ O(10³), diversities ∈ [0, 1]) compress well under log‑Y.
 
 ### `coloring`
 

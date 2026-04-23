@@ -64,10 +64,97 @@ _QA_COLORS = [
 
 # Time-series trace colors (must match _TS_COLORS in controls.py).
 _TS_COLORS = [
-    _c(0xFF44DD44),  # population - green
-    _c(0xFFFFAA22),  # food_bug   - orange
+    _c(0xFF44DD44),  # population     - green
+    _c(0xFFFFAA22),  # food_bug       - orange
+    _c(0xFFFFFF55),  # food_eaten_avg - yellow
+    _c(0xFF55BBFF),  # genome_div     - light blue
+    _c(0xFFFF77CC),  # io_div         - pink
 ]
-_TS_LABELS = ['pop', 'food_bug']
+_TS_LABELS = ['pop', 'food_bug', 'food_eaten_avg', 'genome_div', 'io_div']
+
+# 3x5 hand-baked bitmap font — lowercase, digits, and a couple of symbols.
+# Each glyph is 5 rows × 3 columns, encoded as 5 ints (top-first, MSB = left).
+# Uppercase-style letterforms used even for lowercase keys; descenders are
+# approximated within the 5-row box.
+_FONT3x5 = {
+    'a': (0b010, 0b101, 0b111, 0b101, 0b101),
+    'b': (0b110, 0b101, 0b110, 0b101, 0b110),
+    'c': (0b011, 0b100, 0b100, 0b100, 0b011),
+    'd': (0b110, 0b101, 0b101, 0b101, 0b110),
+    'e': (0b111, 0b100, 0b110, 0b100, 0b111),
+    'f': (0b111, 0b100, 0b110, 0b100, 0b100),
+    'g': (0b011, 0b100, 0b101, 0b101, 0b011),
+    'h': (0b101, 0b101, 0b111, 0b101, 0b101),
+    'i': (0b111, 0b010, 0b010, 0b010, 0b111),
+    'j': (0b001, 0b001, 0b001, 0b101, 0b010),
+    'k': (0b101, 0b110, 0b100, 0b110, 0b101),
+    'l': (0b100, 0b100, 0b100, 0b100, 0b111),
+    'm': (0b101, 0b111, 0b111, 0b101, 0b101),
+    'n': (0b101, 0b111, 0b111, 0b111, 0b101),
+    'o': (0b010, 0b101, 0b101, 0b101, 0b010),
+    'p': (0b110, 0b101, 0b110, 0b100, 0b100),
+    'q': (0b010, 0b101, 0b101, 0b011, 0b001),
+    'r': (0b110, 0b101, 0b110, 0b110, 0b101),
+    's': (0b011, 0b100, 0b010, 0b001, 0b110),
+    't': (0b111, 0b010, 0b010, 0b010, 0b010),
+    'u': (0b101, 0b101, 0b101, 0b101, 0b010),
+    'v': (0b101, 0b101, 0b101, 0b010, 0b010),
+    'w': (0b101, 0b101, 0b111, 0b111, 0b101),
+    'x': (0b101, 0b101, 0b010, 0b101, 0b101),
+    'y': (0b101, 0b101, 0b010, 0b010, 0b010),
+    'z': (0b111, 0b001, 0b010, 0b100, 0b111),
+    '0': (0b111, 0b101, 0b101, 0b101, 0b111),
+    '1': (0b010, 0b110, 0b010, 0b010, 0b111),
+    '2': (0b110, 0b001, 0b010, 0b100, 0b111),
+    '3': (0b110, 0b001, 0b010, 0b001, 0b110),
+    '4': (0b101, 0b101, 0b111, 0b001, 0b001),
+    '5': (0b111, 0b100, 0b110, 0b001, 0b110),
+    '6': (0b011, 0b100, 0b110, 0b101, 0b010),
+    '7': (0b111, 0b001, 0b010, 0b100, 0b100),
+    '8': (0b010, 0b101, 0b010, 0b101, 0b010),
+    '9': (0b010, 0b101, 0b011, 0b001, 0b110),
+    '_': (0b000, 0b000, 0b000, 0b000, 0b111),
+    '/': (0b001, 0b001, 0b010, 0b100, 0b100),
+    ' ': (0b000, 0b000, 0b000, 0b000, 0b000),
+    '-': (0b000, 0b000, 0b111, 0b000, 0b000),
+    '.': (0b000, 0b000, 0b000, 0b000, 0b010),
+}
+
+
+def _draw_text(dst, x, y, text, color):
+    """Write `text` into int32 ARGB buffer `dst` at (x, y) in the given color.
+    One pixel per glyph dot (no scaling). Unknown characters render as blanks."""
+    for ci, ch in enumerate(text):
+        glyph = _FONT3x5.get(ch.lower(), _FONT3x5[' '])
+        gx = x + ci * 4  # 3-wide + 1 px inter-glyph gap
+        for row, bits in enumerate(glyph):
+            gy = y + row
+            if gy < 0 or gy >= dst.shape[0]:
+                continue
+            if bits & 0b100 and 0 <= gx     < dst.shape[1]:
+                dst[gy, gx]     = color
+            if bits & 0b010 and 0 <= gx + 1 < dst.shape[1]:
+                dst[gy, gx + 1] = color
+            if bits & 0b001 and 0 <= gx + 2 < dst.shape[1]:
+                dst[gy, gx + 2] = color
+
+
+def _draw_ts_legend(dst):
+    """Draw a small legend in the upper-left of the ts probe window:
+    one row per trace (swatch + label) stacked vertically."""
+    pad_x = 3
+    pad_y = 3
+    row_h = 7          # 5 px glyph + 2 px gap
+    sw_w  = 4          # swatch width
+    sw_h  = 4          # swatch height
+    gap   = 3          # gap between swatch and text
+    for ti, label in enumerate(_TS_LABELS):
+        y = pad_y + ti * row_h
+        if y + 5 >= dst.shape[0]:
+            break
+        col = _TS_COLORS[ti % len(_TS_COLORS)]
+        dst[y:y + sw_h, pad_x:pad_x + sw_w] = col
+        _draw_text(dst, pad_x + sw_w + gap, y, label, col)
 
 # Egenome 9-position palette, order [NW, N, NE, W, C, E, SW, S, SE].
 # Packed (R, G, B) with alpha applied at blend time.
@@ -233,6 +320,7 @@ def _render_ts(dst, trace_bufs, cursor, global_max):
         dst[ys, xs[mask]] = col
 
     dst[:PROBE_H, PROBE_W - 1] = CURSOR_COLOR
+    _draw_ts_legend(dst)
     return global_max
 
 

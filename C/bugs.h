@@ -98,9 +98,17 @@ int      bugs_get_births_last(void);    /* births on last step */
 int      bugs_get_deaths_last(void);    /* deaths on last step */
 float    bugs_get_food_bug(void);       /* Σ food over alive bugs */
 float    bugs_get_food_env(void);       /* Σ F(x) over grid */
+float    bugs_get_food_eaten_last(void);/* total food eaten during last step */
 float   *bugs_get_food_field(void);     /* [N*N] live F(x) */
 float   *bugs_get_food_source(void);    /* [N*N] regen target */
 uint8_t *bugs_get_bug_mask(void);       /* [N*N] 1 if a bug is on that cell */
+
+/* Diversity counters over the live population.
+ * bugs_count_distinct_genomes: # distinct genome_hash values.
+ * bugs_count_distinct_io_pairs: # distinct (current nbhd, dx, dy) triples,
+ *   using the packed key scheme from the g-activity probe. */
+int  bugs_count_distinct_genomes(void);
+int  bugs_count_distinct_io_pairs(void);
 
 /* ── Egenome population stats ──────────────────────────────────────────
  *

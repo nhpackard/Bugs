@@ -211,6 +211,12 @@ class Bugs:
         L.bugs_get_food_bug.restype          = ctypes.c_float
         L.bugs_get_food_env.argtypes         = []
         L.bugs_get_food_env.restype          = ctypes.c_float
+        L.bugs_get_food_eaten_last.argtypes  = []
+        L.bugs_get_food_eaten_last.restype   = ctypes.c_float
+        L.bugs_count_distinct_genomes.argtypes  = []
+        L.bugs_count_distinct_genomes.restype   = ctypes.c_int
+        L.bugs_count_distinct_io_pairs.argtypes = []
+        L.bugs_count_distinct_io_pairs.restype  = ctypes.c_int
         L.bugs_get_food_field.argtypes       = []
         L.bugs_get_food_field.restype        = ctypes.POINTER(ctypes.c_float)
         L.bugs_get_food_source.argtypes      = []
@@ -555,6 +561,19 @@ class Bugs:
     def get_food_env(self):
         """Σ F(x) over the grid."""
         return float(self._lib.bugs_get_food_env())
+
+    def get_food_eaten_last(self):
+        """Total food eaten by all bugs during the most recent bugs_step().
+        Zeroed at the start of each step."""
+        return float(self._lib.bugs_get_food_eaten_last())
+
+    def count_distinct_genomes(self):
+        """# distinct genome_hash values across live bugs."""
+        return int(self._lib.bugs_count_distinct_genomes())
+
+    def count_distinct_io_pairs(self):
+        """# distinct (current-nbhd, dx, dy) input/output pairs across live bugs."""
+        return int(self._lib.bugs_count_distinct_io_pairs())
 
     # ── G-activity probe (per whole-genome content hash) ──────────────
 

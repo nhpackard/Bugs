@@ -111,6 +111,7 @@ static int      n_free    = 0;
 static int  g_births_last = 0;
 static int  g_deaths_last = 0;
 static float g_food_bug   = 0.0f;   /* running Σ of alive-bug food */
+static float g_food_eaten_last = 0.0f;  /* total food eaten during last bugs_step */
 
 /* Smoothed running max of bug ages, driving the bug-age colormode's
  * autoscale. Fast-up / slow-down: jumps to any new observed max, decays
@@ -263,6 +264,7 @@ void bugs_init(int N)
     g_step = 0;
     g_births_last = g_deaths_last = 0;
     g_food_bug    = 0.0f;
+    g_food_eaten_last = 0.0f;
     g_age_scale   = 50.0;
 
     act_reset();
@@ -398,6 +400,7 @@ void bugs_exterminate(void)
     g_step = 0;
     g_births_last = g_deaths_last = 0;
     g_food_bug    = 0.0f;
+    g_food_eaten_last = 0.0f;
     g_age_scale   = 50.0;
     act_reset();
     gact_reset();
@@ -1001,6 +1004,7 @@ void bugs_step(void)
 
     g_births_last = 0;
     g_deaths_last = 0;
+    g_food_eaten_last = 0.0f;
 
     int n_before = n_alive;
     int new_alive_count = 0;
@@ -1056,6 +1060,7 @@ void bugs_step(void)
             F_food[here]  -= eat;
             b->food       += eat;
             g_food_bug    += eat;
+            g_food_eaten_last += eat;
         }
 
         /* Tax: always applied */
@@ -1105,9 +1110,57 @@ float    bugs_get_food_env(void)
     for (size_t i = 0; i < cells; i++) s += F_food[i];
     return (float)s;
 }
+float    bugs_get_food_eaten_last(void) { return g_food_eaten_last; }
 float   *bugs_get_food_field(void)  { return F_food; }
 float   *bugs_get_food_source(void) { return F_src; }
 uint8_t *bugs_get_bug_mask(void)    { return bug_mask; }
+
+/* Diversity counters ─────────────────────────────────────────────── */
+
+static int _u32_cmp(const void *a, const void *b)
+{
+    uint32_t ua = *(const uint32_t *)a, ub = *(const uint32_t *)b;
+    return (ua > ub) - (ua < ub);
+}
+
+/* Number of distinct genome_hash values across alive bugs. */
+int bugs_count_distinct_genomes(void)
+{
+    if (n_alive <= 0) return 0;
+    uint32_t *buf = (uint32_t *)malloc((size_t)n_alive * sizeof(uint32_t));
+    if (!buf) return 0;
+    for (int i = 0; i < n_alive; i++)
+        buf[i] = bug_pool[alive_ids[i]].genome_hash;
+    qsort(buf, (size_t)n_alive, sizeof(uint32_t), _u32_cmp);
+    int distinct = 1;
+    for (int i = 1; i < n_alive; i++)
+        if (buf[i] != buf[i - 1]) distinct++;
+    free(buf);
+    return distinct;
+}
+
+/* Number of distinct (nbhd, dx, dy) input/output pairs across alive bugs,
+ * using each bug's *current* neighborhood pattern as the input. Shares
+ * the g_pair_key packing scheme with the g-activity probe, so the key
+ * space is the same. */
+int bugs_count_distinct_io_pairs(void)
+{
+    if (n_alive <= 0) return 0;
+    uint32_t *buf = (uint32_t *)malloc((size_t)n_alive * sizeof(uint32_t));
+    if (!buf) return 0;
+    for (int i = 0; i < n_alive; i++) {
+        bug_t *b = &bug_pool[alive_ids[i]];
+        int nbhd = neighborhood_gene(b);
+        gene_t g = b->genome.genes[nbhd];
+        buf[i] = g_pair_key(nbhd, g.dx, g.dy);
+    }
+    qsort(buf, (size_t)n_alive, sizeof(uint32_t), _u32_cmp);
+    int distinct = 1;
+    for (int i = 1; i < n_alive; i++)
+        if (buf[i] != buf[i - 1]) distinct++;
+    free(buf);
+    return distinct;
+}
 
 /* Population mean and std-dev of each egenome entry (9 positions).
  * mean_out[9] and std_out[9] are overwritten; both filled with zeros

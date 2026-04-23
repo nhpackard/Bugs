@@ -26,6 +26,14 @@ PROBE_W     = 1024
 PROBE_H     = 128
 TITLE_BAR_H = 28   # macOS title bar estimate
 
+# Egenome probe dimensions: narrower window (half PROBE_W), taller
+# (three rows) split into 9 horizontal strips (one per Moore position).
+EG_W        = PROBE_W // 2
+EG_WIN_H    = 3 * PROBE_H
+EG_N_POS    = 9
+EG_N_Q      = 9
+EG_STRIP_H  = EG_WIN_H // EG_N_POS
+
 # Bug-coloring histogram window: 31x31 bins × BIN_PX = window size.
 COLORING_BIN_PX = 10
 COLORING_W      = 31 * COLORING_BIN_PX   # 310
@@ -250,93 +258,116 @@ def _draw_egenome_template(dst):
         dst[y0:y0 + cell - 2, x0:x0 + cell - 2] = _pack(cr, cg, cb)
 
 
-def _render_egenome(dst, means, stds, cursor):
-    """Render the egenome probe: 9 translucent position bands over linear
-    Y axis in [0, 1]. For each position p, a filled band extends from
-    mean[p]-std[p] to mean[p]+std[p], with a solid centerline at mean[p].
-    Bands are blended additively so overlaps lighten.
+def _render_egenome(dst, q_view, cursor):
+    """Render the egenome probe as 9 stacked strips (one per Moore position).
 
-    means, stds : list of 9 float32[PROBE_W] arrays.
+    q_view : ndarray (9 positions, 9 quantiles, EG_W) float32 — each
+             column is the quantile vector for one time step. Quantiles
+             are p10, p20, …, p90 in order along axis 1.
+
+    Each strip shows 8 bands between consecutive quantiles; brightness is
+    inversely proportional to band span (narrow = bright, wide = dim),
+    giving a density-shaded approximation of the population distribution.
+    A white line traces the median (p50). Bands use the position's palette
+    color; empty (all-zero) columns render as background.
     """
     import numpy as np
 
-    # Background
-    dst[:PROBE_H, :PROBE_W] = BG_COLOR
+    dst[:EG_WIN_H, :EG_W] = BG_COLOR
 
-    # Unpack BG once so we can blend against it cleanly.
-    bg = int(BG_COLOR) & 0xFFFFFFFF
-    br = (bg >> 16) & 0xFF
-    bg_g = (bg >> 8) & 0xFF
-    bb = bg & 0xFF
+    xs = np.arange(EG_W, dtype=np.int32)
+    ys_strip = np.arange(EG_STRIP_H, dtype=np.int32)
+    # Value at each pixel row of one strip: y=0 → 1.0, y=H-1 → 0.0.
+    strip_vals = 1.0 - ys_strip.astype(np.float32) / max(EG_STRIP_H - 1, 1)
 
-    # Float workspace so we can blend, then convert back to int32 ARGB.
-    work_r = np.full((PROBE_H, PROBE_W), br, dtype=np.float32)
-    work_g = np.full((PROBE_H, PROBE_W), bg_g, dtype=np.float32)
-    work_b = np.full((PROBE_H, PROBE_W), bb, dtype=np.float32)
+    for p in range(EG_N_POS):
+        strip_y0 = p * EG_STRIP_H
+        strip_y1 = strip_y0 + EG_STRIP_H
 
-    xs = np.arange(PROBE_W, dtype=np.int32)
-    band_alpha = 0.30   # translucent band
-    line_alpha = 1.00   # opaque centerline
-
-    for p in range(_EG_N_POS):
-        m = np.roll(means[p], -cursor)
-        s = np.roll(stds [p], -cursor)
-
-        # Ignore columns with no data yet (mean==0 and std==0 on init-reset).
-        valid = (m > 0) | (s > 0)
+        qs = np.roll(q_view[p], -cursor, axis=1)     # (9, EG_W)
+        valid = (qs > 0).any(axis=0)
         if not valid.any():
             continue
 
+        # Per-position adaptive reference: typical (narrow) inter-quantile
+        # span, so brightness is normalized against the position's own
+        # baseline rather than a global constant. Uses the 10th percentile
+        # of each band's span across time so a few wide columns don't wash
+        # everything out.
+        spans = np.diff(qs, axis=0)                  # (8, EG_W) band spans
+        valid_spans = spans[:, valid]
+        if valid_spans.size == 0:
+            ref_span = 1.0 / EG_N_Q
+        else:
+            ref_span = float(np.quantile(valid_spans, 0.1))
+            if ref_span < 1e-4:
+                ref_span = 1e-4
+
         cr, cg, cb = _EG_RGB[p]
 
-        # Clip to [0, 1] before mapping to pixel rows.
-        m_c = np.clip(m, 0.0, 1.0)
-        s_c = np.clip(s, 0.0, 1.0)
-        top = np.clip(m_c + s_c, 0.0, 1.0)
-        bot = np.clip(m_c - s_c, 0.0, 1.0)
+        # Float workspace for this strip so bands compose cleanly.
+        bg = int(BG_COLOR) & 0xFFFFFFFF
+        br = float((bg >> 16) & 0xFF)
+        bg_g = float((bg >>  8) & 0xFF)
+        bb = float(bg & 0xFF)
+        work_r = np.full((EG_STRIP_H, EG_W), br,  dtype=np.float32)
+        work_g = np.full((EG_STRIP_H, EG_W), bg_g, dtype=np.float32)
+        work_b = np.full((EG_STRIP_H, EG_W), bb,  dtype=np.float32)
 
-        # Convert to row coordinates: y=0 is top (value=1), y=H-1 is bottom (value=0).
-        y_top = ((1.0 - top) * (PROBE_H - 1)).astype(np.int32)
-        y_bot = ((1.0 - bot) * (PROBE_H - 1)).astype(np.int32)
-        y_mid = ((1.0 - m_c) * (PROBE_H - 1)).astype(np.int32)
+        # Vectorized band membership: for each pixel, which band (0..8)
+        # does its value fall into? Count of quantiles below it.
+        # cmp shape: (9, EG_STRIP_H, EG_W) — broadcasts qs (9, 1, EG_W)
+        # against strip_vals (EG_STRIP_H, EG_W).
+        qs_b = qs[:, None, :]                          # (9, 1, EG_W)
+        vals = strip_vals[None, :, None]               # (1, H, 1)
+        # band_idx[y, x] in 0..9. 0 = below p10, 9 = above p90.
+        band_idx = (qs_b < vals).sum(axis=0)           # (EG_STRIP_H, EG_W)
 
-        # Band fill: for each valid column, blend α into rows [y_top, y_bot].
-        cols = np.where(valid)[0]
-        for x in cols:
-            y0 = int(y_top[x])
-            y1 = int(y_bot[x])
-            if y0 > y1:
-                y0, y1 = y1, y0
-            work_r[y0:y1 + 1, x] = work_r[y0:y1 + 1, x] * (1 - band_alpha) + cr * band_alpha
-            work_g[y0:y1 + 1, x] = work_g[y0:y1 + 1, x] * (1 - band_alpha) + cg * band_alpha
-            work_b[y0:y1 + 1, x] = work_b[y0:y1 + 1, x] * (1 - band_alpha) + cb * band_alpha
+        for k in range(EG_N_Q - 1):                    # k = 0..7
+            band_mask = (band_idx == k + 1)            # inside (q_k, q_{k+1}]
+            if not band_mask.any():
+                continue
+            # Per-column brightness = ref_span / this column's band span.
+            col_span = spans[k]                        # (EG_W,)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                bright = np.where(col_span > 1e-6,
+                                  ref_span / col_span, 1.0)
+            bright = np.clip(bright, 0.0, 1.0).astype(np.float32)
+            bright2d = np.broadcast_to(bright[None, :],
+                                       (EG_STRIP_H, EG_W))
+            m = band_mask
+            alpha = bright2d[m]                         # per-pixel alpha
+            work_r[m] = work_r[m] * (1.0 - alpha) + cr * alpha
+            work_g[m] = work_g[m] * (1.0 - alpha) + cg * alpha
+            work_b[m] = work_b[m] * (1.0 - alpha) + cb * alpha
 
-        # Centerline.
-        ys = np.clip(y_mid[valid], 0, PROBE_H - 1)
-        work_r[ys, xs[valid]] = work_r[ys, xs[valid]] * (1 - line_alpha) + cr * line_alpha
-        work_g[ys, xs[valid]] = work_g[ys, xs[valid]] * (1 - line_alpha) + cg * line_alpha
-        work_b[ys, xs[valid]] = work_b[ys, xs[valid]] * (1 - line_alpha) + cb * line_alpha
+        # Median line: p50 is quantile index 4. Overlay in white.
+        m_vals = qs[4]
+        med_y = np.clip(
+            ((1.0 - np.clip(m_vals, 0.0, 1.0)) * (EG_STRIP_H - 1)).astype(np.int32),
+            0, EG_STRIP_H - 1)
+        work_r[med_y[valid], xs[valid]] = 255.0
+        work_g[med_y[valid], xs[valid]] = 255.0
+        work_b[med_y[valid], xs[valid]] = 255.0
 
-    # Gridlines at y = 0.25, 0.50, 0.75 for readability
-    for v in (0.25, 0.5, 0.75):
-        y = int((1.0 - v) * (PROBE_H - 1))
-        work_r[y, :] = np.clip(work_r[y, :] + 20, 0, 255)
-        work_g[y, :] = np.clip(work_g[y, :] + 20, 0, 255)
-        work_b[y, :] = np.clip(work_b[y, :] + 20, 0, 255)
+        # Pack to ARGB int32 and splat into dst strip.
+        r = np.clip(work_r, 0, 255).astype(np.uint32)
+        g = np.clip(work_g, 0, 255).astype(np.uint32)
+        b = np.clip(work_b, 0, 255).astype(np.uint32)
+        argb = (0xFF000000 | (r << 16) | (g << 8) | b).astype(np.int64)
+        argb = np.where(argb < 0x80000000, argb,
+                        argb - 0x100000000).astype(np.int32)
+        dst[strip_y0:strip_y1, :EG_W] = argb
 
-    # Pack to ARGB int32
-    r = np.clip(work_r, 0, 255).astype(np.uint32)
-    g = np.clip(work_g, 0, 255).astype(np.uint32)
-    b = np.clip(work_b, 0, 255).astype(np.uint32)
-    argb = (0xFF000000 | (r << 16) | (g << 8) | b).astype(np.int64)
-    argb = np.where(argb < 0x80000000, argb, argb - 0x100000000).astype(np.int32)
-    dst[:PROBE_H, :PROBE_W] = argb
+        # Faint horizontal separator between strips (except above strip 0).
+        if p > 0:
+            dst[strip_y0, :EG_W] = CURSOR_COLOR
 
     # 3x3 Moore-neighborhood legend in upper-left.
     _draw_egenome_template(dst)
 
-    # Cursor marker
-    dst[:PROBE_H, PROBE_W - 1] = CURSOR_COLOR
+    # Cursor marker (rightmost column).
+    dst[:EG_WIN_H, EG_W - 1] = CURSOR_COLOR
 
 
 def main():
@@ -468,31 +499,20 @@ def main():
             _open_deciles_shm(gq_activity_shm_name, "gq-activity", QA_N_DECILES)
         if gq_activity_shm is None: gq_activity_shm_name = None
 
-    # ── Egenome shared memory (9 means + 9 stds) ─────────────────
+    # ── Egenome shared memory (9 positions × 9 quantiles × EG_W) ───
     egenome_shm     = None
     egenome_cursor  = None
-    egenome_means   = None
-    egenome_stds    = None
+    egenome_q       = None
     if egenome_shm_name:
         try:
             egenome_shm = SharedMemory(name=egenome_shm_name)
             egenome_cursor = np.ndarray((1,), dtype=np.int32,
                                         buffer=egenome_shm.buf)
-            egenome_means = []
-            egenome_stds  = []
-            off = 4
-            for _ in range(_EG_N_POS):
-                egenome_means.append(
-                    np.ndarray((PROBE_W,), dtype=np.float32,
-                               buffer=egenome_shm.buf, offset=off))
-                off += PROBE_W * 4
-            for _ in range(_EG_N_POS):
-                egenome_stds.append(
-                    np.ndarray((PROBE_W,), dtype=np.float32,
-                               buffer=egenome_shm.buf, offset=off))
-                off += PROBE_W * 4
-            print(f"Bugs SDL: egenome shm opened ({_EG_N_POS}x{PROBE_W} means+stds)",
-                  flush=True)
+            egenome_q = np.ndarray(
+                (EG_N_POS, EG_N_Q, EG_W), dtype=np.float32,
+                buffer=egenome_shm.buf, offset=4)
+            print(f"Bugs SDL: egenome shm opened "
+                  f"({EG_N_POS}x{EG_N_Q}x{EG_W} quantiles)", flush=True)
         except Exception as e:
             print(f"Bugs SDL: egenome SharedMemory open failed: {e}",
                   flush=True)
@@ -659,8 +679,8 @@ def main():
     eg_win_p = eg_surf_p = eg_dst = None
     if egenome_shm is not None:
         eg_win_p, eg_surf_p, eg_dst, next_probe_y = _create_probe_window(
-            b"egenome (mean +/- std, 9 positions)",
-            PROBE_W, PROBE_H, "egenome")
+            b"egenome (9 positions, quantile bands)",
+            EG_W, EG_WIN_H, "egenome")
 
     # ── ts window ────────────────────────────────────────────────
     ts_window_p = ts_surface_p = ts_dst = None
@@ -742,10 +762,10 @@ def main():
             sdl2.SDL_UpdateWindowSurface(gq_win_p)
 
         # egenome window
-        if eg_win_p is not None and egenome_means is not None:
+        if eg_win_p is not None and egenome_q is not None:
             sdl2.SDL_LockSurface(eg_surf_p)
             cur_eg = int(egenome_cursor[0])
-            _render_egenome(eg_dst, egenome_means, egenome_stds, cur_eg)
+            _render_egenome(eg_dst, egenome_q, cur_eg)
             sdl2.SDL_UnlockSurface(eg_surf_p)
             sdl2.SDL_UpdateWindowSurface(eg_win_p)
 

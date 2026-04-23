@@ -111,6 +111,11 @@ static int  g_births_last = 0;
 static int  g_deaths_last = 0;
 static float g_food_bug   = 0.0f;   /* running Σ of alive-bug food */
 
+/* Smoothed running max of bug ages, driving the bug-age colormode's
+ * autoscale. Fast-up / slow-down: jumps to any new observed max, decays
+ * slowly otherwise. Reset on bugs_init / bugs_exterminate. */
+static double g_age_scale = 50.0;
+
 /* ── Forward declarations ──────────────────────────────────────────── */
 
 static void act_reset(void);
@@ -257,6 +262,7 @@ void bugs_init(int N)
     g_step = 0;
     g_births_last = g_deaths_last = 0;
     g_food_bug    = 0.0f;
+    g_age_scale   = 50.0;
 
     act_reset();
     gact_reset();
@@ -391,6 +397,7 @@ void bugs_exterminate(void)
     g_step = 0;
     g_births_last = g_deaths_last = 0;
     g_food_bug    = 0.0f;
+    g_age_scale   = 50.0;
     act_reset();
     gact_reset();
 }
@@ -1165,6 +1172,20 @@ void bugs_colorize(int32_t *pixels, int colormode)
         pixels[i] = mk_argb(0, g, 0);
     }
 
+    /* Bug-age autoscale: pre-scan alive bugs once. Fast up (jump to any
+     * new observed max), slow down (geometric decay) so quiet periods let
+     * the scale relax back. Floor prevents divide-by-zero blowups. */
+    if (colormode == 3) {
+        int max_age = 0;
+        for (int i = 0; i < n_alive; i++) {
+            int a = bug_pool[alive_ids[i]].age;
+            if (a > max_age) max_age = a;
+        }
+        if ((double)max_age > g_age_scale) g_age_scale = (double)max_age;
+        else                                g_age_scale *= 0.995;
+        if (g_age_scale < 10.0) g_age_scale = 10.0;
+    }
+
     /* Overlay bugs */
     for (int i = 0; i < n_alive; i++) {
         int32_t bid = alive_ids[i];
@@ -1181,8 +1202,10 @@ void bugs_colorize(int32_t *pixels, int colormode)
             uint8_t v = (uint8_t)(f * 255.0f);
             c = mk_argb(v, v, v);
         } else if (colormode == 3) {
-            /* bug-age: saturating cool→hot gradient. v = age/(age+tau) */
-            float v = (float)b->age / (float)(b->age + 50);
+            /* bug-age: age/g_age_scale mapped to cool→hot gradient. */
+            float v = (float)((double)b->age / g_age_scale);
+            if (v < 0.0f) v = 0.0f;
+            if (v > 1.0f) v = 1.0f;
             uint8_t R = (uint8_t)(80.0f  + 175.0f * v);
             uint8_t G = (uint8_t)(60.0f  + 560.0f * v * (1.0f - v));
             uint8_t B = (uint8_t)(40.0f  + 180.0f * (1.0f - v));

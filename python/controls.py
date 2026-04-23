@@ -53,19 +53,26 @@ _QUIT, _CMODE, _STEP, _FPS10, _PAUSED = 0, 1, 2, 3, 4
 PROBE_W = 1024
 PROBE_H = 128
 
+# Egenome probe timeline width (narrower than the shared PROBE_W so the
+# window is half as wide — the egenome distribution shape doesn't need
+# full-width history).
+EG_W = PROBE_W // 2
+
 _AVAILABLE_PROBES = {
     'G-activity':  'G-activity: whole-genome content-hash strip chart',
     'Gq-activity': 'Gq-activity: G-activity deciles',
     'g-activity':  'g-activity: per (nbhd, move) LUT-slot strip chart',
     'gq-activity': 'gq-activity: g-activity deciles',
-    'egenome':     'Egenome: 9 translucent position bands (mean ± std)',
+    'egenome':     'Egenome: 9-position strip chart of per-position quantiles',
     'ts':          'Scalar time-series (population, total food-in-bugs)',
     'coloring':    'Bug-coloring: per-LUT-index move distribution (3x3 template)',
 }
 
-# Egenome probe: 9 position bands, each with a (mean, std) pair stored
-# as two PROBE_W-long float32 traces. Palette lives in sdl_worker.
+# Egenome probe: 9 positions × 9 quantiles (p10..p90 in 10% steps) × EG_W
+# float32 columns.  Palette lives in sdl_worker.
 _EG_N_POS = 9
+_EG_N_Q   = 9
+_EG_QS    = np.linspace(0.1, 0.9, _EG_N_Q)
 
 # Bit labels for the 3x3 Moore-neighborhood template, in reading order
 # (top→bottom, left→right). Bit i corresponds to _COLORING_LABELS[i].
@@ -220,35 +227,25 @@ def run_with_controls(sim, cell_px=None, colormode=3, paused=True, probes=None,
         gq_activity_col = np.zeros(QA_N_DECILES, dtype=np.float32)
 
     # ── Egenome probe setup ─────────────────────────────────────────
-    # shm layout: 4 B cursor + 9 mean traces (float32, PROBE_W each)
-    #                        + 9 std  traces (float32, PROBE_W each)
+    # shm layout: 4 B cursor + 9 positions × 9 quantiles × EG_W float32
+    # columns, stored as a single (9, 9, EG_W) view.  Axis order is
+    # [position][quantile][time] so _record_probes can write one time
+    # column as a (9, 9) slab.
     egenome_enabled      = bool((probes or {}).get('egenome'))
     egenome_shm          = None
     egenome_cursor       = None
-    egenome_means        = None   # list of 9 np.ndarray (float32, PROBE_W)
-    egenome_stds         = None
+    egenome_q            = None   # ndarray (9, 9, EG_W) float32
 
     if egenome_enabled:
-        eg_shm_size = 4 + 2 * _EG_N_POS * PROBE_W * 4
+        eg_shm_size = 4 + _EG_N_POS * _EG_N_Q * EG_W * 4
         egenome_shm = SharedMemory(create=True, size=eg_shm_size)
         _egbuf = np.ndarray((eg_shm_size,), dtype=np.uint8,
                             buffer=egenome_shm.buf)
         _egbuf[:] = 0
         egenome_cursor = np.ndarray((1,), dtype=np.int32,
                                     buffer=egenome_shm.buf)
-        egenome_means = []
-        egenome_stds  = []
-        off = 4
-        for _ in range(_EG_N_POS):
-            egenome_means.append(
-                np.ndarray((PROBE_W,), dtype=np.float32,
-                           buffer=egenome_shm.buf, offset=off))
-            off += PROBE_W * 4
-        for _ in range(_EG_N_POS):
-            egenome_stds.append(
-                np.ndarray((PROBE_W,), dtype=np.float32,
-                           buffer=egenome_shm.buf, offset=off))
-            off += PROBE_W * 4
+        egenome_q = np.ndarray((_EG_N_POS, _EG_N_Q, EG_W), dtype=np.float32,
+                               buffer=egenome_shm.buf, offset=4)
 
     # ── Time-series (ts) probe setup ────────────────────────────────
     ts_enabled     = bool((probes or {}).get('ts'))
@@ -374,20 +371,22 @@ def run_with_controls(sim, cell_px=None, colormode=3, paused=True, probes=None,
     # ── ipywidgets ─────────────────────────────────────────────────
     btn_pause = widgets.ToggleButton(
         value=bool(paused), description="Run" if paused else "Pause",
-        button_style="", layout=widgets.Layout(width="90px"))
+        button_style="", layout=widgets.Layout(width="68px"))
     btn_restart = widgets.Button(
-        description="Restart", layout=widgets.Layout(width="80px"))
-    btn_step  = widgets.Button(
-        description="Step",  layout=widgets.Layout(width="70px"))
-    btn_quit  = widgets.Button(
+        description="Restart", layout=widgets.Layout(width="68px"))
+    btn_step = widgets.Button(
+        description="Step",  layout=widgets.Layout(width="52px"))
+    btn_step200 = widgets.Button(
+        description="Step200", layout=widgets.Layout(width="72px"))
+    btn_quit = widgets.Button(
         description="Quit",  button_style="danger",
-        layout=widgets.Layout(width="70px"))
-    btn_save  = widgets.Button(
-        description="Save Plots", layout=widgets.Layout(width="100px"))
+        layout=widgets.Layout(width="52px"))
+    btn_save = widgets.Button(
+        description="Plots", layout=widgets.Layout(width="52px"))
     txt_descriptor = widgets.Text(
-        placeholder='run descriptor', layout=widgets.Layout(width="200px"))
+        placeholder='run descriptor', layout=widgets.Layout(width="160px"))
     btn_export = widgets.Button(
-        description="Export", layout=widgets.Layout(width="70px"))
+        description="Export", layout=widgets.Layout(width="60px"))
 
     sl_kw = dict(continuous_update=True,
                  style={"description_width": "120px"},
@@ -514,8 +513,8 @@ def run_with_controls(sim, cell_px=None, colormode=3, paused=True, probes=None,
     status_lbl = widgets.Label(value="Starting…")
 
     _rows = [
-        widgets.HBox([btn_pause, btn_restart, btn_step, btn_quit, btn_save,
-                      txt_descriptor, btn_export]),
+        widgets.HBox([btn_pause, btn_restart, btn_step, btn_step200,
+                      btn_quit, btn_save, txt_descriptor, btn_export]),
         sl_mutation_rate, sl_reproduction_food,
         sl_movement_cost, sl_eat_amount, sl_initial_food,
         sl_food_inc, sl_mu_egenome, sl_gdiff, sl_move_range,
@@ -577,12 +576,16 @@ def run_with_controls(sim, cell_px=None, colormode=3, paused=True, probes=None,
                 gq_activity_deciles[di][cur] = gq_activity_col[di]
             gq_activity_cursor[0] = (cur + 1) % PROBE_W
         if egenome_enabled:
-            mean, std = sim.egenome_stats()
             cur = int(egenome_cursor[0])
-            for pi in range(_EG_N_POS):
-                egenome_means[pi][cur] = mean[pi]
-                egenome_stds [pi][cur] = std [pi]
-            egenome_cursor[0] = (cur + 1) % PROBE_W
+            eg = sim.get_egenome()   # (pop, 9) float32
+            if eg.shape[0] > 0:
+                # np.quantile over axis=0 gives (9, 9): [quantile][position].
+                # Transpose to [position][quantile] to match shm axis order.
+                q = np.quantile(eg, _EG_QS, axis=0).T.astype(np.float32)
+                egenome_q[:, :, cur] = q
+            else:
+                egenome_q[:, :, cur] = 0
+            egenome_cursor[0] = (cur + 1) % EG_W
         if ts_enabled:
             ts_cur = int(ts_cursor[0])
             ts_traces[0][ts_cur] = float(sim.get_population())
@@ -632,6 +635,13 @@ def run_with_controls(sim, cell_px=None, colormode=3, paused=True, probes=None,
 
     sim.step_display = _step_display
 
+    def on_step200(_):
+        if not _alive[0]:
+            return
+        if not st['paused']:
+            _set_paused(True)
+        _step_display(200, delay=0.02)
+
     def on_quit(_):
         st['running'] = False
         if _alive[0]:
@@ -673,19 +683,27 @@ def run_with_controls(sim, cell_px=None, colormode=3, paused=True, probes=None,
             saved += 1
         if egenome_enabled:
             cur = int(egenome_cursor[0])
-            t   = np.arange(PROBE_W)
+            t   = np.arange(EG_W)
             pos_labels = ['NW', 'N', 'NE', 'W', 'C', 'E', 'SW', 'S', 'SE']
-            fig, ax = plt.subplots(figsize=(8, 3))
+            fig, axes = plt.subplots(_EG_N_POS, 1, figsize=(8, 10),
+                                     sharex=True)
             for pi in range(_EG_N_POS):
-                m = np.roll(egenome_means[pi], -cur)
-                s = np.roll(egenome_stds [pi], -cur)
-                line, = ax.plot(t, m, linewidth=0.9, label=pos_labels[pi])
-                ax.fill_between(t, m - s, m + s, color=line.get_color(),
-                                alpha=0.15, linewidth=0)
-            ax.set_ylim(0.0, 1.0)
-            ax.set_title("egenome per-position mean ± std")
-            ax.set_xlabel("t (relative)")
-            ax.legend(ncol=3, fontsize=7)
+                ax = axes[pi]
+                q = np.roll(egenome_q[pi], -cur, axis=1)   # (9, EG_W)
+                med = q[4]
+                for k in range(4):
+                    lo = q[k]
+                    hi = q[_EG_N_Q - 1 - k]
+                    alpha = 0.15 + 0.1 * k
+                    ax.fill_between(t, lo, hi, alpha=alpha, linewidth=0,
+                                    color='C0')
+                ax.plot(t, med, linewidth=0.8, color='white')
+                ax.plot(t, med, linewidth=0.5, color='C0')
+                ax.set_ylim(0.0, 1.0)
+                ax.set_ylabel(pos_labels[pi], rotation=0, labelpad=15)
+                ax.set_yticks([])
+            axes[-1].set_xlabel("t (relative)")
+            fig.suptitle("egenome per-position quantile bands")
             fig.tight_layout()
             fig.savefig("probe_egenome.png", dpi=150)
             plt.close(fig)
@@ -747,9 +765,7 @@ def run_with_controls(sim, cell_px=None, colormode=3, paused=True, probes=None,
                 gq_activity_deciles[di][:] = 0
         if egenome_enabled:
             egenome_cursor[0] = 0
-            for pi in range(_EG_N_POS):
-                egenome_means[pi][:] = 0
-                egenome_stds [pi][:] = 0
+            egenome_q[:] = 0
         if ts_enabled:
             ts_cursor[0] = 0
             for ti in range(_TS_N):
@@ -761,6 +777,7 @@ def run_with_controls(sim, cell_px=None, colormode=3, paused=True, probes=None,
     btn_pause.observe(on_pause_toggle, names='value')
     btn_restart.on_click(on_restart)
     btn_step.on_click(on_step)
+    btn_step200.on_click(on_step200)
     btn_quit.on_click(on_quit)
     btn_save.on_click(on_save)
     btn_export.on_click(on_export)

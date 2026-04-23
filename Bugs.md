@@ -595,16 +595,29 @@ the boundary via POSIX `multiprocessing.shared_memory` — no copying.
 ```python
 from python.bugs_py import plot_food_power_spectrum
 fig, info = plot_food_power_spectrum(sim, num_frames=1, step_each=1)
-print(info['asymmetry'])   # (V - H) / (V + H), 0 = balanced
+print(info['asymmetry'])       # (V - H) / (V + H), 0 = balanced (H vs V)
+print(info['asymmetry_diag'])  # (NE-SW − NW-SE) / sum, 0 = balanced
 ```
 
 Draws three panels: the food field, its log-power spectrum (fftshifted,
-DC removed), and horizontal/vertical axis cuts overlaid. `asymmetry`
-compares power summed along `kx=0` (vertical in k-space, from y-varying
-features) vs `ky=0` (horizontal). For an isotropic process it should be
-near 0; evolved populations may break symmetry, but the *direction*
-should be random across seeds. Systematic sign bias across many runs
-points to an axis-asymmetric bug in the update rule.
+DC suppressed by `subtract_mean=True`), and four axis cuts overlaid
+(H/V solid, NE-SW/NW-SE dashed). The DC bin is NaN-masked in the cut
+plot so the artificial plunge from mean-subtraction does not appear —
+it remains visible as a dark pixel in the 2D imshow.
+
+`asymmetry` compares power summed along `kx=0` (vertical in k-space,
+from y-varying features) vs `ky=0` (horizontal). `asymmetry_diag`
+compares the two diagonals (ky=kx vs ky=−kx), catching rotations of a
+cardinal bias. For an isotropic process both should be near 0; evolved
+populations may break symmetry, but the *direction* should be random
+across seeds. Systematic sign bias across many runs points to an
+axis-asymmetric bug in the update rule.
+
+Note on the near-DC shoulder: the big peak at k=±1, ±2 is expected —
+food cells are strongly correlated with neighbors (diffusion + slow
+regrowth), so most spectral energy lives in the lowest-k modes.
+Mean-subtraction only kills the single DC bin; it does not touch those
+neighbors.
 
 Averaging over `num_frames` frames (with `step_each` ticks advanced
 between frames) damps per-frame noise.

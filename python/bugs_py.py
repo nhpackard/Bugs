@@ -824,9 +824,11 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
     Returns
     -------
     (fig, info) : matplotlib Figure, dict of symmetry metrics.
-        info keys: 'P_horiz_axis' (sum along kx, ky=0), 'P_vert_axis' (sum
-        along ky, kx=0), 'asymmetry' ((V-H)/(V+H), 0=balanced), 'P_mean_2d'
-        (the averaged shifted power spectrum).
+        info keys: 'P_horiz_axis', 'P_vert_axis' (sums along kx/ky axes);
+        'P_ne_sw', 'P_nw_se' (sums along the two diagonals);
+        'asymmetry' ((V-H)/(V+H), 0=balanced) and 'asymmetry_diag'
+        ((NE_SW - NW_SE)/(sum)); 'P_mean_2d' (the averaged shifted
+        power spectrum).
     """
     import matplotlib.pyplot as plt
 
@@ -846,7 +848,8 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
     P_acc /= num_frames
     P = np.fft.fftshift(P_acc)
 
-    # Symmetry metrics — exclude the DC bin to avoid dominating the ratio.
+    # Axis cuts (ky=0 and kx=0 lines). Exclude the DC bin to avoid
+    # dominating the integral.
     horiz_axis = P[Nc, :].copy()          # ky=0, kx varying
     vert_axis  = P[:, Nc].copy()          # kx=0, ky varying
     horiz_axis[Nc] = 0.0
@@ -855,6 +858,19 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
     P_v = float(vert_axis.sum())
     denom = P_v + P_h
     asym = (P_v - P_h) / denom if denom > 0 else 0.0
+
+    # Diagonal cuts: NE-SW is P[i, i] (ky=kx), NW-SE is P[i, N-1-i]
+    # (ky=-kx). For even N the NW-SE line is one bin off DC, so the DC
+    # bin never contributes — we only have to null it on the NE-SW cut.
+    ne_sw_axis = np.diag(P).copy()                 # length N
+    nw_se_axis = np.diag(np.fliplr(P)).copy()      # length N
+    ne_sw_axis[Nc] = 0.0
+    if N % 2 == 1:
+        nw_se_axis[Nc] = 0.0
+    P_ne_sw = float(ne_sw_axis.sum())
+    P_nw_se = float(nw_se_axis.sum())
+    denom_d = P_ne_sw + P_nw_se
+    asym_diag = (P_ne_sw - P_nw_se) / denom_d if denom_d > 0 else 0.0
 
     fig, axes = plt.subplots(1, 3, figsize=figsize)
     F_disp = sim.get_food_field().reshape(N, N)
@@ -869,23 +885,52 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
     axes[1].set_xlabel('kx'); axes[1].set_ylabel('ky')
     axes[1].axhline(0, color='cyan', lw=0.5, alpha=0.4)
     axes[1].axvline(0, color='cyan', lw=0.5, alpha=0.4)
+    # Mark both diagonals too so the eye can match plot lines to cuts.
+    axes[1].plot([-Nc, Nc], [-Nc, Nc], color='cyan',
+                 lw=0.5, alpha=0.4, linestyle='--')
+    axes[1].plot([-Nc, Nc], [Nc, -Nc], color='cyan',
+                 lw=0.5, alpha=0.4, linestyle='--')
 
     ks = np.arange(-Nc, N - Nc)
-    axes[2].semilogy(ks, P[Nc, :], label=f'ky=0 (horizontal)  Σ={P_h:.2e}')
-    axes[2].semilogy(ks, P[:, Nc], label=f'kx=0 (vertical)    Σ={P_v:.2e}')
-    axes[2].set_title(f'axis cuts  asym (V−H)/(V+H) = {asym:+.3f}')
+    # NaN-mask the DC bin so semilogy doesn't draw the spurious plunge
+    # introduced by subtract_mean.
+    def _mask_dc(arr, dc_idx):
+        a = arr.astype(float).copy()
+        a[dc_idx] = np.nan
+        return a
+
+    h_plot = _mask_dc(P[Nc, :], Nc)
+    v_plot = _mask_dc(P[:, Nc], Nc)
+    ne_sw_plot = _mask_dc(np.diag(P), Nc)
+    # For even N the NW-SE line doesn't hit DC; mask only for odd N.
+    nw_se_plot = np.diag(np.fliplr(P)).astype(float).copy()
+    if N % 2 == 1:
+        nw_se_plot[Nc] = np.nan
+
+    axes[2].semilogy(ks, h_plot,     label=f'ky=0  (H)   Σ={P_h:.2e}')
+    axes[2].semilogy(ks, v_plot,     label=f'kx=0  (V)   Σ={P_v:.2e}')
+    axes[2].semilogy(ks, ne_sw_plot, linestyle='--',
+                     label=f'ky=kx (NE-SW) Σ={P_ne_sw:.2e}')
+    axes[2].semilogy(ks, nw_se_plot, linestyle='--',
+                     label=f'ky=-kx (NW-SE) Σ={P_nw_se:.2e}')
+    axes[2].set_title(f'axis cuts  '
+                      f'asym (V−H)/(V+H)={asym:+.3f}  '
+                      f'diag (NE-SW − NW-SE)/Σ={asym_diag:+.3f}')
     axes[2].set_xlabel('k'); axes[2].set_ylabel('|F̂|²')
-    axes[2].legend(fontsize=8, loc='lower center')
+    axes[2].legend(fontsize=7, loc='lower center', ncol=2)
     axes[2].grid(alpha=0.3)
 
     fig.tight_layout()
     if not show:
         plt.close(fig)
     return fig, {
-        'P_horiz_axis': P_h,
-        'P_vert_axis':  P_v,
-        'asymmetry':    asym,
-        'P_mean_2d':    P,
+        'P_horiz_axis':   P_h,
+        'P_vert_axis':    P_v,
+        'P_ne_sw':        P_ne_sw,
+        'P_nw_se':        P_nw_se,
+        'asymmetry':      asym,
+        'asymmetry_diag': asym_diag,
+        'P_mean_2d':      P,
     }
 
 

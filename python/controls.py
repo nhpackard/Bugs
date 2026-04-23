@@ -42,7 +42,8 @@ from IPython.display import display as ipy_display
 from multiprocessing.shared_memory import SharedMemory
 
 
-COLOR_MODES      = ["red-bugs", "genome-hash", "bug-food", "bug-age"]
+COLOR_MODES      = ["red-bugs", "genome-hash", "bug-food", "bug-age",
+                    "lineage"]
 _SLIDER_RESUME_S = 0.20
 _WORKER          = os.path.join(os.path.dirname(__file__), "sdl_worker.py")
 
@@ -97,7 +98,7 @@ def available_probes():
 _active_stop = None
 
 
-def run_with_controls(sim, cell_px=None, colormode=3, paused=True, probes=None,
+def run_with_controls(sim, cell_px=None, colormode=4, paused=True, probes=None,
                       max_steps=None):
     """
     Display ipywidgets controls and open an SDL2 simulation window.
@@ -110,7 +111,7 @@ def run_with_controls(sim, cell_px=None, colormode=3, paused=True, probes=None,
     sim       : initialised Bugs instance
     cell_px   : screen pixels per cell (default: sim.cell_px from CELL_PX #define)
     colormode : initial colour mode (0=red-bugs, 1=genome-hash, 2=bug-food,
-                3=bug-age).  Default 3.
+                3=bug-age, 4=lineage).  Default 4.
     paused    : if True, start in paused state
     probes    : dict of probe names to enable, e.g. {'activity': True, 'q_activity': True}
     max_steps : if not None, auto-pause after this many simulation steps.

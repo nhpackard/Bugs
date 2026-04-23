@@ -12,7 +12,7 @@ Usage (internal):
 
 ctrl_shm layout (5 × int32)
     [0] quit      1 = exit
-    [1] colormode 0/1/2/3
+    [1] colormode 0/1/2/3/4
     [2] step_cnt
     [3] fps × 10
     [4] paused    0/1
@@ -558,7 +558,8 @@ def main():
             print(f"Bugs SDL: ts SharedMemory open failed: {e}", flush=True)
             ts_shm_name = None
 
-    COLOR_MODES = ["red-bugs", "genome-hash", "bug-food", "bug-age"]
+    COLOR_MODES = ["red-bugs", "genome-hash", "bug-food", "bug-age",
+                   "lineage"]
 
     # ── SDL2 init ─────────────────────────────────────────────────
     if sdl2.SDL_Init(sdl2.SDL_INIT_VIDEO) != 0:

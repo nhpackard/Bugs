@@ -61,6 +61,7 @@ typedef struct {
     int32_t  x;
     int32_t  y;
     uint32_t genome_hash;  /* FNV-1a over genome bytes (does not include egenome) */
+    uint32_t lineage_color;/* ARGB; random at seed, inherited unchanged on birth */
     uint8_t  alive;
     uint8_t  born_this_step;
 } bug_t;
@@ -415,6 +416,9 @@ void bugs_seed_with_density(float density)
                 b->born_this_step = 0;
                 genome_random(&b->genome);
                 b->genome_hash = genome_hash_fn(&b->genome);
+                /* Founder gets a fresh random color; all descendants
+                 * inherit it unchanged (see reproduction path). */
+                b->lineage_color = 0xFF000000u | (rng_u32() & 0x00FFFFFFu);
                 for (int k = 0; k < EGENOME_N; k++)
                     b->egenome[k] = g_egenome_init[k];
                 place_or_bump(bid, x, y);
@@ -1030,6 +1034,7 @@ void bugs_step(void)
             genome_mutate_copy(&b->genome, &c->genome, g_mutation_rate);
             egenome_mutate_copy(b->egenome, c->egenome, g_mu_egenome);
             c->genome_hash = genome_hash_fn(&c->genome);
+            c->lineage_color = b->lineage_color;   /* inherit unchanged */
             place_or_bump(cid, b->x, b->y);
             if (bug_pool[cid].alive) {
                 alive_ids[n_before + new_alive_count++] = cid;
@@ -1210,6 +1215,9 @@ void bugs_colorize(int32_t *pixels, int colormode)
             uint8_t G = (uint8_t)(60.0f  + 560.0f * v * (1.0f - v));
             uint8_t B = (uint8_t)(40.0f  + 180.0f * (1.0f - v));
             c = mk_argb(R, G, B);
+        } else if (colormode == 4) {
+            /* lineage: random color at seed, inherited unchanged on birth. */
+            c = (int32_t)b->lineage_color;
         } else {
             /* default: red dot */
             c = mk_argb(255, 60, 60);

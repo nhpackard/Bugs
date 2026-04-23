@@ -622,6 +622,29 @@ neighbors.
 Averaging over `num_frames` frames (with `step_each` ticks advanced
 between frames) damps per-frame noise.
 
+### Egenome per-position distributions
+
+```python
+from python.bugs_py import plot_egenome
+fig, info = plot_egenome(sim, eps=1e-3)
+print(info['N']['p_lo'], info['N']['p_hi'])  # boundary mass fractions
+```
+
+Overlays the nine per-position egenome distributions as translucent
+`seaborn.kdeplot` curves (one per Moore position, colored to match the
+SDL egenome-probe palette). Some positions typically peg at 0 or 1
+during long runs (delta functions in the distribution); a naive KDE
+over those samples collapses into tall spikes that swamp the
+interior-only curves. To keep dynamic range, samples within `eps` of 0
+or 1 are excluded from the KDE and reported as mass fractions in the
+legend instead (`0:<fraction>  mid:<fraction>  1:<fraction>`).
+
+This reveals the slow (~10k-tick) reshaping of the interior
+distributions that correlates with asymmetric structure in the food
+field. Pair with `plot_food_power_spectrum` to see the co-evolving
+spatial asymmetry. Returns the legend's boundary breakdown per position
+in `info`.
+
 ### Egenome D4-orbit sweep
 
 ```python

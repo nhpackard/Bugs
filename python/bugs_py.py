@@ -1051,6 +1051,95 @@ _EG_ORBIT_EDGES   = [1, 3, 5, 7]   # N, W, E, S
 _EG_ORBIT_CORNERS = [0, 2, 6, 8]   # NW, NE, SW, SE
 _EG_POS_NAMES     = ['NW', 'N', 'NE', 'W', 'C', 'E', 'SW', 'S', 'SE']
 
+# Matches the palette used by the egenome SDL probe (sdl_worker._EG_RGB).
+_EG_PALETTE = [
+    (0xFF, 0x44, 0x44), (0xFF, 0x99, 0x44), (0xFF, 0xDD, 0x44),
+    (0xAA, 0xFF, 0x44), (0x44, 0xFF, 0x88), (0x44, 0xDD, 0xFF),
+    (0x44, 0x88, 0xFF), (0xAA, 0x44, 0xFF), (0xFF, 0x44, 0xDD),
+]
+
+
+def plot_egenome(sim, eps=1e-3, bw_adjust=0.5, show=True, figsize=(11, 5)):
+    """Plot the 9 per-position egenome distributions as overlaid KDE curves.
+
+    Many simulations peg one or more egenome positions at 0 or 1 while
+    others drift in the interior of [0, 1]. A naive KDE collapses those
+    pegged distributions into tall narrow spikes that swamp the
+    interior-only curves. This function separates boundary mass from
+    interior mass: samples within `eps` of 0 or 1 are excluded from the
+    KDE and reported as fractions in the legend instead. The plotted
+    curves thus have usable dynamic range even when other positions are
+    delta functions.
+
+    Parameters
+    ----------
+    sim : Bugs
+        A running simulation with a nonempty population.
+    eps : float
+        Half-width of the "boundary" zone around 0 and 1. Samples with
+        value <= eps or >= 1-eps are counted as boundary mass rather
+        than fed to the KDE.
+    bw_adjust : float
+        Scales seaborn's KDE bandwidth; smaller = sharper.
+    show : bool
+        If False, the figure is detached from pyplot so it won't display
+        inline — useful in sweeps.
+    figsize : tuple
+
+    Returns
+    -------
+    (fig, info) : Figure, dict
+        info is keyed by position name ('NW', 'N', ...) and each entry
+        contains: 'p_lo' (fraction <= eps), 'p_hi' (fraction >= 1-eps),
+        'p_interior', 'interior_n' (KDE sample count).
+    """
+    import matplotlib.pyplot as plt
+    try:
+        import seaborn as sns
+    except ImportError as e:
+        raise ImportError(
+            "plot_egenome requires seaborn (pip install seaborn)") from e
+
+    eg = sim.get_egenome()
+    if eg.shape[0] == 0:
+        raise RuntimeError("no alive bugs — nothing to plot")
+
+    colors = [(r / 255., g / 255., b / 255.) for (r, g, b) in _EG_PALETTE]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    info = {}
+    for p in range(9):
+        v = eg[:, p]
+        at_lo = float((v <= eps).mean())
+        at_hi = float((v >= 1.0 - eps).mean())
+        interior = v[(v > eps) & (v < 1.0 - eps)]
+        info[_EG_POS_NAMES[p]] = dict(
+            p_lo=at_lo, p_hi=at_hi,
+            p_interior=1.0 - at_lo - at_hi,
+            interior_n=int(len(interior)))
+        label = (f'{_EG_POS_NAMES[p]:<2}  '
+                 f'0:{at_lo:.2f}  mid:{1-at_lo-at_hi:.2f}  1:{at_hi:.2f}')
+        if len(interior) >= 5:
+            sns.kdeplot(x=interior, ax=ax, color=colors[p],
+                        alpha=0.35, linewidth=1.5, fill=True,
+                        bw_adjust=bw_adjust, clip=(0.0, 1.0), label=label)
+        else:
+            # Not enough interior samples to fit a KDE — show a legend
+            # entry so the boundary mass is still visible to the reader.
+            ax.plot([], [], color=colors[p], label=label)
+
+    ax.set_xlim(0.0, 1.0)
+    ax.set_xlabel('egenome threshold value')
+    ax.set_ylabel('KDE density  (interior-only)')
+    ax.set_title(f'egenome per-position distributions  '
+                 f'pop={eg.shape[0]}  t={sim.get_step()}  (ε={eps})')
+    ax.legend(fontsize=8, loc='upper center', ncol=3, framealpha=0.85)
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    if not show:
+        plt.close(fig)
+    return fig, info
+
 
 def plot_egenome_orbit_sweep(init, state, *, seeds, steps,
                              show=True, figsize=(12, 4)):

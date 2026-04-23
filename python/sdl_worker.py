@@ -377,17 +377,20 @@ def _render_egenome(dst, q_view, cursor):
         if not valid.any():
             continue
 
-        # Per-position adaptive reference: typical (narrow) inter-quantile
-        # span, so brightness is normalized against the position's own
-        # baseline rather than a global constant. Uses the 10th percentile
-        # of each band's span across time so a few wide columns don't wash
-        # everything out.
+        # Per-position adaptive reference: typical inter-quantile span,
+        # so brightness is normalized against the position's own baseline
+        # rather than a global constant. Uses the *median* of non-zero
+        # spans so that (a) zero-span bands from peggings at 0/1 don't
+        # drag ref_span to 0, and (b) a single very narrow band (e.g.,
+        # 0.003 between a pegged p10 and a nearly-pegged p20) doesn't
+        # dominate via the low percentile and dim the rest of the strip.
         spans = np.diff(qs, axis=0)                  # (8, EG_W) band spans
-        valid_spans = spans[:, valid]
-        if valid_spans.size == 0:
+        nz_spans = spans[:, valid]
+        nz_spans = nz_spans[nz_spans > 1e-6]
+        if nz_spans.size == 0:
             ref_span = 1.0 / EG_N_Q
         else:
-            ref_span = float(np.quantile(valid_spans, 0.1))
+            ref_span = float(np.median(nz_spans))
             if ref_span < 1e-4:
                 ref_span = 1e-4
 

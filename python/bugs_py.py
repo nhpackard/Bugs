@@ -807,16 +807,30 @@ def import_run(filepath=None, recipe='final', lib_path=None):
 # ── Diagnostics ──────────────────────────────────────────────────────
 
 def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
-                             subtract_mean=True, show=True,
-                             figsize=(13, 4)):
+                             subtract_mean=True, k_min=2,
+                             show=True, figsize=(13, 4)):
     """Plot the 2D power spectrum of the food field and horizontal/vertical
-    cuts, as a symmetry diagnostic.
+    + diagonal cuts, as a symmetry diagnostic.
 
     For an isotropic process the 2D power spectrum should look (statistically)
     radially symmetric. A systematic excess along the kx-axis vs the ky-axis
     — or vice versa — is a red flag: something in the simulation prefers one
     cardinal direction over the other. Evolution *may* break symmetry, but
     the direction in which it breaks should be random across runs.
+
+    The integrated (A−B)/(A+B) diagonal-total asymmetry is blind to shape
+    mismatches at equal total power, and is noise-dominated by the huge
+    low-k bins near DC. This function therefore:
+
+      * applies a near-DC mask (`k_min`) that zeros out |k| < k_min bins on
+        all four cuts before any summing — killing the low-k pileup;
+      * reports a **bin-by-bin** diagonal metric as the headline number:
+        `diag_asym = Σ|A_i − B_i| / Σ(A_i + B_i)` — sensitive to per-bin
+        differences regardless of total power match;
+      * also reports a **shape** metric `diag_shape` = total-variation
+        distance between the two normalized diagonals, and a magnitude
+        `asymmetry_diag = |A−B|/(A+B)` (the unsigned version of the old
+        total-imbalance metric).
 
     Parameters
     ----------
@@ -830,6 +844,13 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
     subtract_mean : bool
         Subtract F.mean() before FFT to kill the DC spike at (0,0), which
         otherwise dominates log-display.
+    k_min : int
+        Near-DC mask radius (in bin-index units from DC, applied along
+        each cut). Bins with |k| < k_min are zeroed before summing and
+        NaN'd in the cuts plot. k_min=1 masks only DC itself; k_min=2
+        also kills the ±1 neighbors that usually dominate the sum; larger
+        values suppress progressively more of the low-k shoulder.
+        Default 2.
     show : bool
         If True (default), the figure is drawn inline by the Jupyter
         auto-display mechanism. If False, the figure is detached from
@@ -843,11 +864,15 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
     Returns
     -------
     (fig, info) : matplotlib Figure, dict of symmetry metrics.
-        info keys: 'P_horiz_axis', 'P_vert_axis' (sums along kx/ky axes);
-        'P_ne_sw', 'P_nw_se' (sums along the two diagonals);
-        'asymmetry' ((V-H)/(V+H), 0=balanced) and 'asymmetry_diag'
-        ((NE_SW - NW_SE)/(sum)); 'P_mean_2d' (the averaged shifted
-        power spectrum).
+        info keys:
+          'P_horiz_axis', 'P_vert_axis', 'P_ne_sw', 'P_nw_se' — masked sums
+            along the four cuts;
+          'asymmetry'      — signed (V−H)/(V+H) H-V imbalance;
+          'asymmetry_diag' — unsigned |A−B|/(A+B) diagonal-total imbalance;
+          'diag_asym'      — bin-by-bin Σ|A_i−B_i|/(A+B) (headline);
+          'diag_shape'     — TV distance between normalized diagonals ∈[0,1];
+          'k_min'          — the near-DC mask radius actually used;
+          'P_mean_2d'      — the averaged fftshifted power spectrum.
     """
     import matplotlib.pyplot as plt
 
@@ -867,29 +892,44 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
     P_acc /= num_frames
     P = np.fft.fftshift(P_acc)
 
-    # Axis cuts (ky=0 and kx=0 lines). Exclude the DC bin to avoid
-    # dominating the integral.
-    horiz_axis = P[Nc, :].copy()          # ky=0, kx varying
-    vert_axis  = P[:, Nc].copy()          # kx=0, ky varying
-    horiz_axis[Nc] = 0.0
-    vert_axis [Nc] = 0.0
+    # Near-DC mask helper: zero bins with |i − dc_idx| < k_min on a 1D cut.
+    # Used before summing. Plot version (below) substitutes NaN for zero.
+    idx = np.arange(N)
+    def _mask_sum(arr, dc_idx):
+        a = arr.astype(float).copy()
+        a[np.abs(idx - dc_idx) < k_min] = 0.0
+        return a
+    def _mask_plot(arr, dc_idx):
+        a = arr.astype(float).copy()
+        a[np.abs(idx - dc_idx) < k_min] = np.nan
+        return a
+
+    # Axis cuts (ky=0 and kx=0 lines).
+    horiz_axis = _mask_sum(P[Nc, :], Nc)      # ky=0, kx varying
+    vert_axis  = _mask_sum(P[:, Nc], Nc)      # kx=0, ky varying
     P_h = float(horiz_axis.sum())
     P_v = float(vert_axis.sum())
     denom = P_v + P_h
     asym = (P_v - P_h) / denom if denom > 0 else 0.0
 
-    # Diagonal cuts: NE-SW is P[i, i] (ky=kx), NW-SE is P[i, N-1-i]
-    # (ky=-kx). For even N the NW-SE line is one bin off DC, so the DC
-    # bin never contributes — we only have to null it on the NE-SW cut.
-    ne_sw_axis = np.diag(P).copy()                 # length N
-    nw_se_axis = np.diag(np.fliplr(P)).copy()      # length N
-    ne_sw_axis[Nc] = 0.0
-    if N % 2 == 1:
-        nw_se_axis[Nc] = 0.0
+    # Diagonal cuts: NE-SW is P[i, i], NW-SE is P[i, N-1-i]. For even N the
+    # NW-SE line is offset 1/2 bin from DC; the index-based |i−Nc| mask is
+    # still the right way to kill the low-k neighborhood.
+    ne_sw_axis = _mask_sum(np.diag(P),             Nc)
+    nw_se_axis = _mask_sum(np.diag(np.fliplr(P)),  Nc)
     P_ne_sw = float(ne_sw_axis.sum())
     P_nw_se = float(nw_se_axis.sum())
     denom_d = P_ne_sw + P_nw_se
-    asym_diag = (P_ne_sw - P_nw_se) / denom_d if denom_d > 0 else 0.0
+
+    # Three diagonal metrics (all unsigned):
+    if denom_d > 0:
+        asym_diag = abs(P_ne_sw - P_nw_se) / denom_d     # total imbalance
+        diag_asym = float(np.abs(ne_sw_axis - nw_se_axis).sum()) / denom_d
+        pA = ne_sw_axis / P_ne_sw if P_ne_sw > 0 else np.zeros_like(ne_sw_axis)
+        pB = nw_se_axis / P_nw_se if P_nw_se > 0 else np.zeros_like(nw_se_axis)
+        diag_shape = 0.5 * float(np.abs(pA - pB).sum())  # TV distance
+    else:
+        asym_diag = diag_asym = diag_shape = 0.0
 
     fig, axes = plt.subplots(1, 3, figsize=figsize)
     F_disp = sim.get_food_field().reshape(N, N)
@@ -911,20 +951,10 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
                  lw=0.5, alpha=0.4, linestyle='--')
 
     ks = np.arange(-Nc, N - Nc)
-    # NaN-mask the DC bin so semilogy doesn't draw the spurious plunge
-    # introduced by subtract_mean.
-    def _mask_dc(arr, dc_idx):
-        a = arr.astype(float).copy()
-        a[dc_idx] = np.nan
-        return a
-
-    h_plot = _mask_dc(P[Nc, :], Nc)
-    v_plot = _mask_dc(P[:, Nc], Nc)
-    ne_sw_plot = _mask_dc(np.diag(P), Nc)
-    # For even N the NW-SE line doesn't hit DC; mask only for odd N.
-    nw_se_plot = np.diag(np.fliplr(P)).astype(float).copy()
-    if N % 2 == 1:
-        nw_se_plot[Nc] = np.nan
+    h_plot     = _mask_plot(P[Nc, :],              Nc)
+    v_plot     = _mask_plot(P[:, Nc],              Nc)
+    ne_sw_plot = _mask_plot(np.diag(P),            Nc)
+    nw_se_plot = _mask_plot(np.diag(np.fliplr(P)), Nc)
 
     axes[2].semilogy(ks, h_plot,     label=f'ky=0  (H)   Σ={P_h:.2e}')
     axes[2].semilogy(ks, v_plot,     label=f'kx=0  (V)   Σ={P_v:.2e}')
@@ -932,9 +962,8 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
                      label=f'ky=kx (NE-SW) Σ={P_ne_sw:.2e}')
     axes[2].semilogy(ks, nw_se_plot, linestyle='--',
                      label=f'ky=-kx (NW-SE) Σ={P_nw_se:.2e}')
-    axes[2].set_title(f'axis cuts  '
-                      f'asym (V−H)/(V+H)={asym:+.3f}  '
-                      f'diag (NE-SW − NW-SE)/Σ={asym_diag:+.3f}')
+    axes[2].set_title(f'H-V asym = {asym:+.3f}    '
+                      f'diag asym = {diag_asym:.3f}')
     axes[2].set_xlabel('k'); axes[2].set_ylabel('|F̂|²')
     axes[2].legend(fontsize=7, loc='lower center', ncol=2)
     axes[2].grid(alpha=0.3)
@@ -949,6 +978,9 @@ def plot_food_power_spectrum(sim, num_frames=1, step_each=1,
         'P_nw_se':        P_nw_se,
         'asymmetry':      asym,
         'asymmetry_diag': asym_diag,
+        'diag_asym':      diag_asym,
+        'diag_shape':     diag_shape,
+        'k_min':          k_min,
         'P_mean_2d':      P,
     }
 
@@ -1152,7 +1184,16 @@ def plot_egenome(sim, eps=1e-3, bw_adjust=0.5, show=True, figsize=(11, 5)):
     ax.set_ylabel('KDE density  (interior-only)')
     ax.set_title(f'egenome per-position distributions  '
                  f'pop={eg.shape[0]}  t={sim.get_step()}  (ε={eps})')
-    ax.legend(fontsize=8, loc='upper center', ncol=3, framealpha=0.85)
+    # matplotlib fills legend entries column-major; reorder handles so
+    # the 3x3 legend reads row-major as a compass rose: NW N NE / W C E / SW S SE.
+    handles, labels = ax.get_legend_handles_labels()
+    if len(handles) == 9:
+        # row-major idx p = row*3 + col; column-major fill order picks cols first.
+        perm = [0, 3, 6, 1, 4, 7, 2, 5, 8]
+        handles = [handles[i] for i in perm]
+        labels  = [labels[i]  for i in perm]
+    ax.legend(handles, labels, fontsize=8, loc='upper center',
+              ncol=3, framealpha=0.85)
     ax.grid(alpha=0.3)
     fig.tight_layout()
     if not show:

@@ -491,30 +491,39 @@ static void shuffle_alive(void)
 #define ACT_INIT_CAP 4096
 #define ACT_EMPTY    0u
 
+/* Flux probe: per-bucket pop history over a bounded past-tick window.
+ * Parallel array act_pop_hist[act_cap * FLUX_W_MAX]; slot (flux_t-1)%W_MAX
+ * holds the pop recorded at the most recent bugs_activity_update. */
+#define FLUX_W_MAX 64
+
 typedef struct {
     uint64_t activity;
     uint32_t pop_count;
     int32_t  color;
 } act_entry_t;
 
-static uint32_t    *act_keys = NULL;
-static act_entry_t *act_vals = NULL;
-static int          act_cap  = 0;
-static int          act_cnt  = 0;
-static int          act_ymax = 2000;
+static uint32_t    *act_keys     = NULL;
+static act_entry_t *act_vals     = NULL;
+static uint32_t    *act_pop_hist = NULL;   /* act_cap * FLUX_W_MAX */
+static int          act_cap      = 0;
+static int          act_cnt      = 0;
+static int          act_ymax     = 2000;
+static uint32_t     flux_t       = 0;      /* # of bugs_activity_update calls */
 
 static void act_init_table(void)
 {
     act_cap  = ACT_INIT_CAP;
     act_cnt  = 0;
-    act_keys = calloc((size_t)act_cap, sizeof(uint32_t));
-    act_vals = calloc((size_t)act_cap, sizeof(act_entry_t));
+    act_keys     = calloc((size_t)act_cap, sizeof(uint32_t));
+    act_vals     = calloc((size_t)act_cap, sizeof(act_entry_t));
+    act_pop_hist = calloc((size_t)act_cap * FLUX_W_MAX, sizeof(uint32_t));
 }
 
 static void act_free_all(void)
 {
-    free(act_keys); act_keys = NULL;
-    free(act_vals); act_vals = NULL;
+    free(act_keys);     act_keys     = NULL;
+    free(act_vals);     act_vals     = NULL;
+    free(act_pop_hist); act_pop_hist = NULL;
     act_cap = act_cnt = 0;
 }
 
@@ -522,6 +531,7 @@ static void act_reset(void)
 {
     act_free_all();
     act_init_table();
+    flux_t = 0;
 }
 
 static void act_resize(void)
@@ -529,6 +539,7 @@ static void act_resize(void)
     int new_cap = act_cap * 2;
     uint32_t    *nk = calloc((size_t)new_cap, sizeof(uint32_t));
     act_entry_t *nv = calloc((size_t)new_cap, sizeof(act_entry_t));
+    uint32_t    *nh = calloc((size_t)new_cap * FLUX_W_MAX, sizeof(uint32_t));
     for (int i = 0; i < act_cap; i++) {
         if (act_keys[i] == ACT_EMPTY) continue;
         uint32_t slot = act_keys[i] % (uint32_t)new_cap;
@@ -536,9 +547,12 @@ static void act_resize(void)
             slot = (slot + 1) % (uint32_t)new_cap;
         nk[slot] = act_keys[i];
         nv[slot] = act_vals[i];
+        memcpy(&nh[(size_t)slot * FLUX_W_MAX],
+               &act_pop_hist[(size_t)i * FLUX_W_MAX],
+               FLUX_W_MAX * sizeof(uint32_t));
     }
-    free(act_keys); free(act_vals);
-    act_keys = nk; act_vals = nv; act_cap = new_cap;
+    free(act_keys); free(act_vals); free(act_pop_hist);
+    act_keys = nk; act_vals = nv; act_pop_hist = nh; act_cap = new_cap;
 }
 
 static act_entry_t *act_find_or_insert(uint32_t key, int32_t color)
@@ -570,6 +584,7 @@ static void act_compact(uint64_t threshold)
 
     uint32_t    *nk = calloc((size_t)new_cap, sizeof(uint32_t));
     act_entry_t *nv = calloc((size_t)new_cap, sizeof(act_entry_t));
+    uint32_t    *nh = calloc((size_t)new_cap * FLUX_W_MAX, sizeof(uint32_t));
     int new_cnt = 0;
     for (int i = 0; i < act_cap; i++) {
         if (act_keys[i] == ACT_EMPTY) continue;
@@ -579,10 +594,13 @@ static void act_compact(uint64_t threshold)
         while (nk[slot] != ACT_EMPTY) slot = (slot + 1) % (uint32_t)new_cap;
         nk[slot] = act_keys[i];
         nv[slot] = act_vals[i];
+        memcpy(&nh[(size_t)slot * FLUX_W_MAX],
+               &act_pop_hist[(size_t)i * FLUX_W_MAX],
+               FLUX_W_MAX * sizeof(uint32_t));
         new_cnt++;
     }
-    free(act_keys); free(act_vals);
-    act_keys = nk; act_vals = nv;
+    free(act_keys); free(act_vals); free(act_pop_hist);
+    act_keys = nk; act_vals = nv; act_pop_hist = nh;
     act_cap  = new_cap;
     act_cnt  = new_cnt;
 }
@@ -607,6 +625,16 @@ void bugs_activity_update(void)
 
     if (act_cnt > 50000)
         act_compact((uint64_t)act_ymax / 10);
+
+    /* Record per-bucket pop into the flux ring buffer. Slot order maps
+     * flux_t → (flux_t % FLUX_W_MAX); most recent slot after this call is
+     * (flux_t % FLUX_W_MAX), because flux_t is incremented afterward. */
+    int slot = (int)(flux_t % FLUX_W_MAX);
+    for (int i = 0; i < act_cap; i++) {
+        act_pop_hist[(size_t)i * FLUX_W_MAX + slot] =
+            (act_keys[i] == ACT_EMPTY) ? 0u : act_vals[i].pop_count;
+    }
+    flux_t++;
 }
 
 void bugs_activity_render_col(int32_t *col, int height)
@@ -722,6 +750,47 @@ void bugs_q_activity_deciles(float *deciles_out)
         deciles_out[d] = buf[idx];
     }
     free(buf);
+}
+
+/* ── Activity flux: slopes of waves crossing an activity band ──────────
+ *
+ * For each live-or-extinct bucket, walk the past `window` ticks (capped
+ * at FLUX_W_MAX) and reconstruct the activity trajectory from the stored
+ * pop history. A tick t' contributes one slope sample = pop_t' iff the
+ * increment interval (A(t'-1), A(t')] overlaps [a_lo, a_hi], i.e.
+ *    A(t'-1) < a_hi  AND  A(t') >= a_lo  AND  pop_t' > 0.
+ * Since A is monotone non-decreasing going forward, we can early-exit
+ * walking backward once A drops below a_lo.
+ *
+ * Returns number of slope samples written into slopes_out (<= max_n). */
+int bugs_activity_crossings(uint64_t a_lo, uint64_t a_hi, int window,
+                            float *slopes_out, int max_n)
+{
+    if (!act_keys || !act_pop_hist || !slopes_out || max_n <= 0) return 0;
+    if (a_hi < a_lo) return 0;
+    if (window < 1) window = 1;
+    if (window > FLUX_W_MAX) window = FLUX_W_MAX;
+    if ((uint32_t)window > flux_t) window = (int)flux_t;
+    if (window <= 0) return 0;
+
+    int n = 0;
+    for (int i = 0; i < act_cap; i++) {
+        if (act_keys[i] == ACT_EMPTY) continue;
+        uint64_t A_after = act_vals[i].activity;
+        size_t base = (size_t)i * FLUX_W_MAX;
+        for (int k = 0; k < window; k++) {
+            uint32_t slot = (flux_t - 1u - (uint32_t)k) % (uint32_t)FLUX_W_MAX;
+            uint32_t h = act_pop_hist[base + slot];
+            uint64_t A_before = (A_after >= h) ? A_after - h : 0;
+            if (h > 0 && A_before < a_hi && A_after >= a_lo) {
+                if (n >= max_n) return n;
+                slopes_out[n++] = (float)h;
+            }
+            if (A_before < a_lo) break;  /* no earlier crossing possible */
+            A_after = A_before;
+        }
+    }
+    return n;
 }
 
 /* ── g-activity: per-(input, output) pair ──────────────────────────────

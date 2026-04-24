@@ -69,8 +69,16 @@ _TS_COLORS = [
     _c(0xFFFFFF55),  # food_eaten_avg - yellow
     _c(0xFF55BBFF),  # genome_div     - light blue
     _c(0xFFFF77CC),  # io_div         - pink
+    _c(0xFF22EEDD),  # activity_flux  - teal
 ]
-_TS_LABELS = ['pop', 'food_bug', 'food_eaten_avg', 'genome_div', 'io_div']
+_TS_LABELS = ['pop', 'food_bug', 'food_eaten_avg',
+              'genome_div', 'io_div', 'activity_flux']
+# Stacked strips in the ts probe window. Indices map into _TS_LABELS/_TS_COLORS.
+_TS_GROUPS = [[0, 1, 2], [3, 4, 5]]
+# Full window height = PROBE_H * number of groups.
+TS_H = PROBE_H * len(_TS_GROUPS)
+# Thin separator line color between stacked group strips.
+TS_SEP_COLOR = _c(0xFF444444)
 
 # 3x5 hand-baked bitmap font — lowercase, digits, and a couple of symbols.
 # Each glyph is 5 rows × 3 columns, encoded as 5 ints (top-first, MSB = left).
@@ -139,22 +147,23 @@ def _draw_text(dst, x, y, text, color):
                 dst[gy, gx + 2] = color
 
 
-def _draw_ts_legend(dst):
-    """Draw a small legend in the upper-left of the ts probe window:
-    one row per trace (swatch + label) stacked vertically."""
+def _draw_ts_legend(dst, y0, trace_idxs):
+    """Draw a legend for one ts group in the upper-left of its strip:
+    one row per trace (swatch + label) starting at vertical offset y0.
+    trace_idxs: iterable of indices into _TS_LABELS/_TS_COLORS."""
     pad_x = 3
     pad_y = 3
     row_h = 7          # 5 px glyph + 2 px gap
     sw_w  = 4          # swatch width
     sw_h  = 4          # swatch height
     gap   = 3          # gap between swatch and text
-    for ti, label in enumerate(_TS_LABELS):
-        y = pad_y + ti * row_h
+    for row, ti in enumerate(trace_idxs):
+        y = y0 + pad_y + row * row_h
         if y + 5 >= dst.shape[0]:
             break
         col = _TS_COLORS[ti % len(_TS_COLORS)]
         dst[y:y + sw_h, pad_x:pad_x + sw_w] = col
-        _draw_text(dst, pad_x + sw_w + gap, y, label, col)
+        _draw_text(dst, pad_x + sw_w + gap, y, _TS_LABELS[ti], col)
 
 # Egenome 9-position palette, order [NW, N, NE, W, C, E, SW, S, SE].
 # Packed (R, G, B) with alpha applied at blend time.
@@ -273,66 +282,71 @@ def _render_coloring(dst, hist, lut_idx):
 
 
 def _render_ts(dst, trace_bufs, cursor, global_max):
-    """Render scalar time-series with per-trace linear auto-scaling.
+    """Render scalar time-series with per-trace linear auto-scaling,
+    grouped into stacked horizontal strips (one group per _TS_GROUPS entry).
 
     Each trace's observed [min, max] over the visible window maps to the
-    middle 80% of the strip height (10% padding top and bottom). Zero
-    samples are treated as "uninitialized / pop=0" and excluded from both
-    autoscale and plotting.
+    middle 80% of its group strip's height (10% padding top and bottom).
+    Zero samples are treated as "uninitialized / pop=0" and excluded from
+    both autoscale and plotting.
 
-    trace_bufs: list of float32[PROBE_W] ring buffers.
+    trace_bufs: list of float32[PROBE_W] ring buffers (all traces).
     global_max: unused (kept for signature compatibility with caller).
     """
     import numpy as np
 
-    dst[:PROBE_H, :PROBE_W] = BG_COLOR
+    dst[:TS_H, :PROBE_W] = BG_COLOR
 
     xs = np.arange(PROBE_W)
-    y_top = 0.1 * (PROBE_H - 1)
-    y_bot = 0.9 * (PROBE_H - 1)
-    H_grid = np.arange(PROBE_H)[:, None]            # (H, 1)
 
-    for ti, b in enumerate(trace_bufs):
-        r = np.roll(b, -cursor)
-        mask = r > 0
-        if not mask.any():
-            continue
-        vals = r[mask]
-        lo = float(vals.min())
-        hi = float(vals.max())
-        if hi <= lo:
-            ys_valid = np.full(int(mask.sum()),
-                               int((y_top + y_bot) * 0.5), dtype=np.int32)
-        else:
-            scale = (y_bot - y_top) / (hi - lo)
-            ys_valid = np.clip(
-                (y_bot - (vals - lo) * scale).astype(np.int32),
-                0, PROBE_H - 1)
+    for gi, group in enumerate(_TS_GROUPS):
+        y0 = gi * PROBE_H
+        strip = dst[y0:y0 + PROBE_H]
+        y_top = 0.1 * (PROBE_H - 1)
+        y_bot = 0.9 * (PROBE_H - 1)
+        H_grid = np.arange(PROBE_H)[:, None]        # (H, 1)
 
-        # Scatter ys over the full x range; -1 marks invalid columns.
-        ys = np.full(PROBE_W, -1, dtype=np.int32)
-        ys[mask] = ys_valid
+        for ti in group:
+            b = trace_bufs[ti]
+            r = np.roll(b, -cursor)
+            mask = r > 0
+            if not mask.any():
+                continue
+            vals = r[mask]
+            lo = float(vals.min())
+            hi = float(vals.max())
+            if hi <= lo:
+                ys_valid = np.full(int(mask.sum()),
+                                   int((y_top + y_bot) * 0.5), dtype=np.int32)
+            else:
+                scale = (y_bot - y_top) / (hi - lo)
+                ys_valid = np.clip(
+                    (y_bot - (vals - lo) * scale).astype(np.int32),
+                    0, PROBE_H - 1)
 
-        # Draw line segments: for each column x where both x-1 and x are
-        # valid, fill the vertical span between y[x-1] and y[x] so the
-        # trace reads as a connected line rather than sparse dots.
-        prev_ys = np.roll(ys, 1)
-        prev_ys[0] = -1
-        both = (ys >= 0) & (prev_ys >= 0)
-        y_lo = np.minimum(ys, prev_ys)
-        y_hi = np.maximum(ys, prev_ys)
-        fill = ((H_grid >= y_lo[None, :])
-                & (H_grid <= y_hi[None, :])
-                & both[None, :])
+            ys = np.full(PROBE_W, -1, dtype=np.int32)
+            ys[mask] = ys_valid
 
-        col = _TS_COLORS[ti % len(_TS_COLORS)]
-        dst[fill] = col
-        # Isolated points (neighbor invalid) still draw as a single pixel.
-        isolated = mask & ~both
-        dst[ys[isolated], xs[isolated]] = col
+            prev_ys = np.roll(ys, 1)
+            prev_ys[0] = -1
+            both = (ys >= 0) & (prev_ys >= 0)
+            y_lo = np.minimum(ys, prev_ys)
+            y_hi = np.maximum(ys, prev_ys)
+            fill = ((H_grid >= y_lo[None, :])
+                    & (H_grid <= y_hi[None, :])
+                    & both[None, :])
 
-    dst[:PROBE_H, PROBE_W - 1] = CURSOR_COLOR
-    _draw_ts_legend(dst)
+            col = _TS_COLORS[ti % len(_TS_COLORS)]
+            strip[fill] = col
+            isolated = mask & ~both
+            strip[ys[isolated], xs[isolated]] = col
+
+        strip[:, PROBE_W - 1] = CURSOR_COLOR
+        _draw_ts_legend(dst, y0, group)
+        # Thin separator line under each non-bottom group.
+        if gi < len(_TS_GROUPS) - 1:
+            dst[y0 + PROBE_H - 1, :PROBE_W] = TS_SEP_COLOR
+
     return global_max
 
 
@@ -791,7 +805,7 @@ def main():
     ts_global_max = 0.0
     if ts_shm is not None:
         ts_window_p, ts_surface_p, ts_dst, next_probe_y = \
-            _create_probe_window(b"time series", PROBE_W, PROBE_H, "ts")
+            _create_probe_window(b"time series", PROBE_W, TS_H, "ts")
 
     # ── coloring window ─────────────────────────────────────────
     col_window_p = col_surface_p = col_dst = None

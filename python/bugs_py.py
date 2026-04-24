@@ -255,6 +255,12 @@ class Bugs:
         L.bugs_q_activity_deciles.argtypes   = [ctypes.POINTER(ctypes.c_float)]
         L.bugs_q_activity_deciles.restype    = None
 
+        # Activity flux: slopes of waves crossing [a_lo, a_hi] in past window
+        L.bugs_activity_crossings.argtypes   = [
+            ctypes.c_uint64, ctypes.c_uint64, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_float), ctypes.c_int]
+        L.bugs_activity_crossings.restype    = ctypes.c_int
+
         # g-activity probe (per (input nbhd, output move) pair)
         L.bugs_g_activity_update.argtypes    = []
         L.bugs_g_activity_update.restype     = None
@@ -616,6 +622,51 @@ class Bugs:
         self._lib.bugs_q_activity_deciles(
             out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
         return out
+
+    def activity_crossings(self, decile_lo=2, decile_hi=3, window=8,
+                           max_n=65536):
+        """Slopes of G-activity waves crossing a decile band in the past
+        `window` ticks.
+
+        The band [a_lo, a_hi] is resolved from the current live-bucket
+        activity decile distribution (deciles are scaled by 1/D, where D
+        is the live-bucket count — see bugs_q_activity_deciles). Returns
+        an ndarray of slope samples (one per (bucket, tick) pair whose
+        activity increment overlapped the band, value = pop at that tick).
+
+        decile_lo, decile_hi: integers in 1..9 selecting p10..p90.
+        """
+        if decile_lo < 1 or decile_lo > 9 or decile_hi < 1 or decile_hi > 9:
+            raise ValueError("decile_lo/decile_hi must be in 1..9")
+        if decile_hi < decile_lo:
+            raise ValueError("decile_hi must be >= decile_lo")
+        deciles = self.Gq_activity_deciles()          # p10..p90, normalized by 1/D
+        # Re-scale deciles back to raw activity values by multiplying by D,
+        # where D = number of live buckets. bugs_q_activity_deciles divides
+        # raw activities by D before sorting.
+        tbl = self.get_G_activity()
+        D = int((tbl['pop_count'] > 0).sum())
+        if D == 0:
+            return np.zeros(0, dtype=np.float32)
+        a_lo = int(round(float(deciles[decile_lo - 1]) * D))
+        a_hi = int(round(float(deciles[decile_hi - 1]) * D))
+        if a_hi < a_lo:
+            a_hi = a_lo
+        out = np.zeros(max_n, dtype=np.float32)
+        n = self._lib.bugs_activity_crossings(
+            ctypes.c_uint64(a_lo), ctypes.c_uint64(a_hi), int(window),
+            out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), max_n)
+        return out[:n]
+
+    def activity_flux(self, decile_lo=2, decile_hi=3, window=8):
+        """Mean activity flow through the decile band per tick:
+        sum(activity_crossings) / window. Zero if no crossings recorded."""
+        slopes = self.activity_crossings(decile_lo=decile_lo,
+                                         decile_hi=decile_hi,
+                                         window=window)
+        if len(slopes) == 0:
+            return 0.0
+        return float(slopes.sum()) / float(window)
 
     # ── g-activity probe (per (input, output) LUT-slot pair) ──────────
 

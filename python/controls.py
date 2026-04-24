@@ -89,13 +89,19 @@ _COLORING_HIST_N = 31 * 31
 # food_eaten_avg — food eaten per live bug this tick (reproductive-fitness proxy).
 # genome_div     — distinct genome_hash / population (whole-genome diversity, ∈[0,1]).
 # io_div         — distinct (nbhd, dx, dy) / population (in-use LUT-slot diversity).
+# activity_flux  — mean G-activity flow through the p20..p30 decile band per tick.
 _TS_TRACES = ('population', 'food_bug', 'food_eaten_avg',
-              'genome_div', 'io_div')
+              'genome_div', 'io_div', 'activity_flux')
 _TS_COLORS = (0xFF44DD44,   # population — green
               0xFFFFAA22,   # food_bug   — orange
               0xFFFFFF55,   # food_eaten_avg — yellow
               0xFF55BBFF,   # genome_div — light blue
-              0xFFFF77CC)   # io_div     — pink
+              0xFFFF77CC,   # io_div     — pink
+              0xFF22EEDD)   # activity_flux — teal
+# Groups partition traces into stacked strips in the ts probe window.
+# Top:    counts/sums/per-bug       [0, 1, 2]
+# Bottom: ratios/diversity/fluxes   [3, 4, 5]
+_TS_GROUPS = ((0, 1, 2), (3, 4, 5))
 _TS_N      = len(_TS_TRACES)
 
 
@@ -606,10 +612,12 @@ def run_with_controls(sim, cell_px=None, colormode=4, paused=True, probes=None,
                 ts_traces[2][ts_cur] = float(sim.get_food_eaten_last()) / pop
                 ts_traces[3][ts_cur] = sim.count_distinct_genomes() / pop
                 ts_traces[4][ts_cur] = sim.count_distinct_io_pairs() / pop
+                ts_traces[5][ts_cur] = sim.activity_flux()
             else:
                 ts_traces[2][ts_cur] = 0.0
                 ts_traces[3][ts_cur] = 0.0
                 ts_traces[4][ts_cur] = 0.0
+                ts_traces[5][ts_cur] = 0.0
             ts_cursor[0] = (ts_cur + 1) % PROBE_W
         if coloring_enabled:
             gi = int(coloring_idx[0])

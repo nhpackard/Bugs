@@ -156,6 +156,16 @@ int  bugs_get_act_ymax(void);
 
 void bugs_q_activity_deciles(float *deciles_out);
 
+/* Activity flux probe: for each bucket, walk the past `window` ticks
+ * (capped internally at a small compile-time bound) and reconstruct the
+ * activity trajectory from stored pop history. A tick contributes one
+ * slope sample = pop iff the activity increment interval (A_prev, A_now]
+ * overlaps [a_lo, a_hi]. Writes up to max_n float slopes and returns the
+ * count written. Use bugs_q_activity_deciles to pick [a_lo, a_hi] bounds
+ * from the live-bucket distribution. */
+int bugs_activity_crossings(uint64_t a_lo, uint64_t a_hi, int window,
+                            float *slopes_out, int max_n);
+
 /* ── g-activity probe (per (input, output) LUT-slot pair) ──────────────
  *
  * Key = (9-bit Moore neighborhood, 8-bit dx+15, 8-bit dy+15) packed into

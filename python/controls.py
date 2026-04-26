@@ -62,6 +62,8 @@ EG_W = PROBE_W // 2
 _AVAILABLE_PROBES = {
     'G-activity':  'G-activity: whole-genome content-hash strip chart',
     'Gq-activity': 'Gq-activity: G-activity deciles',
+    'N-activity':  'N-activity: Channon shadow whole-genome strip chart',
+    'Nq-activity': 'Nq-activity: N-activity deciles',
     'g-activity':  'g-activity: per (nbhd, move) LUT-slot strip chart',
     'gq-activity': 'gq-activity: g-activity deciles',
     'egenome':     'Egenome: 9-position strip chart of per-position quantiles',
@@ -200,6 +202,55 @@ def run_with_controls(sim, cell_px=None, colormode=4, paused=True, probes=None,
             off += PROBE_W * 4
         Gq_activity_col = np.zeros(QA_N_DECILES, dtype=np.float32)
 
+    # ── N-activity probe setup (Channon-style neutral shadow) ───────
+    N_activity_enabled = bool((probes or {}).get('N-activity'))
+    N_activity_shm     = None
+    N_activity_cursor  = None
+    N_activity_pixels  = None
+    N_activity_col     = None
+
+    if N_activity_enabled:
+        nact_shm_size = 4 + PROBE_W * ACT_H * 4
+        N_activity_shm = SharedMemory(create=True, size=nact_shm_size)
+        _nbuf = np.ndarray((nact_shm_size,), dtype=np.uint8,
+                           buffer=N_activity_shm.buf)
+        _nbuf[:] = 0
+        N_activity_cursor = np.ndarray((1,), dtype=np.int32,
+                                       buffer=N_activity_shm.buf)
+        N_activity_pixels = np.ndarray((ACT_H, PROBE_W), dtype=np.int32,
+                                       buffer=N_activity_shm.buf, offset=4)
+        N_activity_col = np.zeros(ACT_H, dtype=np.int32)
+
+    # ── Nq-activity (deciles of N-activity) probe setup ─────────────
+    Nq_activity_enabled  = bool((probes or {}).get('Nq-activity'))
+    Nq_activity_shm      = None
+    Nq_activity_cursor   = None
+    Nq_activity_deciles  = None
+    Nq_activity_col      = None
+
+    if Nq_activity_enabled:
+        nqa_shm_size = 4 + QA_N_DECILES * PROBE_W * 4
+        Nq_activity_shm = SharedMemory(create=True, size=nqa_shm_size)
+        _nqabuf = np.ndarray((nqa_shm_size,), dtype=np.uint8,
+                             buffer=Nq_activity_shm.buf)
+        _nqabuf[:] = 0
+        Nq_activity_cursor = np.ndarray((1,), dtype=np.int32,
+                                         buffer=Nq_activity_shm.buf)
+        Nq_activity_deciles = []
+        off = 4
+        for _ in range(QA_N_DECILES):
+            Nq_activity_deciles.append(
+                np.ndarray((PROBE_W,), dtype=np.float32,
+                           buffer=Nq_activity_shm.buf, offset=off))
+            off += PROBE_W * 4
+        Nq_activity_col = np.zeros(QA_N_DECILES, dtype=np.float32)
+
+    # If either N-probe is enabled, attach the neutral shadow now (snapshot
+    # of current real population). Mirroring runs automatically every step.
+    neutral_enabled = N_activity_enabled or Nq_activity_enabled
+    if neutral_enabled:
+        sim.neutral_enable()
+
     # ── g-activity probe setup (per (nbhd, move) LUT-slot pair) ─────
     g_activity_enabled = bool((probes or {}).get('g-activity'))
     g_activity_shm     = None
@@ -310,6 +361,10 @@ def run_with_controls(sim, cell_px=None, colormode=4, paused=True, probes=None,
         cmd += ["--G-activity=" + G_activity_shm.name]
     if Gq_activity_enabled:
         cmd += ["--Gq-activity=" + Gq_activity_shm.name]
+    if N_activity_enabled:
+        cmd += ["--N-activity=" + N_activity_shm.name]
+    if Nq_activity_enabled:
+        cmd += ["--Nq-activity=" + Nq_activity_shm.name]
     if g_activity_enabled:
         cmd += ["--g-activity=" + g_activity_shm.name]
     if gq_activity_enabled:
@@ -351,6 +406,10 @@ def run_with_controls(sim, cell_px=None, colormode=4, paused=True, probes=None,
             all_shm.append(G_activity_shm)
         if Gq_activity_shm is not None:
             all_shm.append(Gq_activity_shm)
+        if N_activity_shm is not None:
+            all_shm.append(N_activity_shm)
+        if Nq_activity_shm is not None:
+            all_shm.append(Nq_activity_shm)
         if g_activity_shm is not None:
             all_shm.append(g_activity_shm)
         if gq_activity_shm is not None:
@@ -576,6 +635,22 @@ def run_with_controls(sim, cell_px=None, colormode=4, paused=True, probes=None,
             for di in range(QA_N_DECILES):
                 Gq_activity_deciles[di][cur] = Gq_activity_col[di]
             Gq_activity_cursor[0] = (cur + 1) % PROBE_W
+        if N_activity_enabled:
+            sim._lib.bugs_n_activity_update()
+            cur = int(N_activity_cursor[0])
+            ptr = N_activity_col.ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
+            sim._lib.bugs_n_activity_render_col(ptr, ACT_H)
+            N_activity_pixels[:, cur] = N_activity_col
+            N_activity_cursor[0] = (cur + 1) % PROBE_W
+        if Nq_activity_enabled:
+            if not N_activity_enabled:
+                sim._lib.bugs_n_activity_update()
+            cur = int(Nq_activity_cursor[0])
+            ptr = Nq_activity_col.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            sim._lib.bugs_nq_activity_deciles(ptr)
+            for di in range(QA_N_DECILES):
+                Nq_activity_deciles[di][cur] = Nq_activity_col[di]
+            Nq_activity_cursor[0] = (cur + 1) % PROBE_W
         if g_activity_enabled:
             sim._lib.bugs_g_activity_update()
             cur = int(g_activity_cursor[0])
@@ -706,6 +781,9 @@ def run_with_controls(sim, cell_px=None, colormode=4, paused=True, probes=None,
         if Gq_activity_enabled:
             _save_deciles("Gq_activity", Gq_activity_cursor, Gq_activity_deciles)
             saved += 1
+        if Nq_activity_enabled:
+            _save_deciles("Nq_activity", Nq_activity_cursor, Nq_activity_deciles)
+            saved += 1
         if gq_activity_enabled:
             _save_deciles("gq_activity", gq_activity_cursor, gq_activity_deciles)
             saved += 1
@@ -784,6 +862,16 @@ def run_with_controls(sim, cell_px=None, colormode=4, paused=True, probes=None,
             Gq_activity_cursor[0] = 0
             for di in range(QA_N_DECILES):
                 Gq_activity_deciles[di][:] = 0
+        if N_activity_enabled:
+            N_activity_cursor[0] = 0
+            N_activity_pixels[:] = 0
+        if Nq_activity_enabled:
+            Nq_activity_cursor[0] = 0
+            for di in range(QA_N_DECILES):
+                Nq_activity_deciles[di][:] = 0
+        # Re-attach the neutral shadow to the freshly-seeded population.
+        if neutral_enabled:
+            sim.neutral_enable()
         if g_activity_enabled:
             g_activity_cursor[0] = 0
             g_activity_pixels[:] = 0

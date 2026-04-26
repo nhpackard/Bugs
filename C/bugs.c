@@ -124,6 +124,10 @@ static void act_reset(void);
 static void act_free_all(void);
 static void gact_reset(void);
 static void gact_free_all(void);
+static void nact_reset(void);
+static void nact_free_all(void);
+static void neut_free_all(void);
+static void neutral_apply_demography(int births, int deaths);
 
 /* ── Pool helpers ──────────────────────────────────────────────────── */
 
@@ -269,6 +273,7 @@ void bugs_init(int N)
 
     act_reset();
     gact_reset();
+    nact_reset();
 }
 
 void bugs_free(void)
@@ -285,6 +290,8 @@ void bugs_free(void)
     gN = 0;
     act_free_all();
     gact_free_all();
+    nact_free_all();
+    neut_free_all();
 }
 
 /* ── Parameter setters ─────────────────────────────────────────────── */
@@ -404,6 +411,8 @@ void bugs_exterminate(void)
     g_age_scale   = 50.0;
     act_reset();
     gact_reset();
+    nact_reset();
+    neut_free_all();
 }
 
 void bugs_seed_with_density(float density)
@@ -491,6 +500,17 @@ static void shuffle_alive(void)
 #define ACT_INIT_CAP 4096
 #define ACT_EMPTY    0u
 
+/* Compact-trigger floors. The compact pass is expensive (allocates fresh
+ * keys/vals/hist arrays and copies survivors), so each table maintains a
+ * threshold that's pushed up after every compact: next_threshold =
+ * max(floor, post_compact_cnt * 3/2). That way, once a table grows large
+ * we don't re-compact until the live-bucket count has grown another 50%
+ * past the survivors. Without hysteresis the compact ran every step once
+ * cnt crossed the floor, causing visible stalls in long runs. */
+#define ACT_COMPACT_FLOOR  50000
+#define GACT_COMPACT_FLOOR 200000
+#define NACT_COMPACT_FLOOR 50000
+
 /* Flux probe: per-bucket pop history over a bounded past-tick window.
  * Parallel array act_pop_hist[act_cap * FLUX_W_MAX]; slot (flux_t-1)%W_MAX
  * holds the pop recorded at the most recent bugs_activity_update. */
@@ -508,6 +528,7 @@ static uint32_t    *act_pop_hist = NULL;   /* act_cap * FLUX_W_MAX */
 static int          act_cap      = 0;
 static int          act_cnt      = 0;
 static int          act_ymax     = 2000;
+static int          act_compact_threshold = ACT_COMPACT_FLOOR;
 static uint32_t     flux_t       = 0;      /* # of bugs_activity_update calls */
 
 static void act_init_table(void)
@@ -532,6 +553,7 @@ static void act_reset(void)
     act_free_all();
     act_init_table();
     flux_t = 0;
+    act_compact_threshold = ACT_COMPACT_FLOOR;
 }
 
 static void act_resize(void)
@@ -623,8 +645,12 @@ void bugs_activity_update(void)
         e->activity++;
     }
 
-    if (act_cnt > 50000)
+    if (act_cnt > act_compact_threshold) {
         act_compact((uint64_t)act_ymax / 10);
+        int next = act_cnt + (act_cnt >> 1);
+        act_compact_threshold = (next < ACT_COMPACT_FLOOR)
+                              ? ACT_COMPACT_FLOOR : next;
+    }
 
     /* Record per-bucket pop into the flux ring buffer. Slot order maps
      * flux_t → (flux_t % FLUX_W_MAX); most recent slot after this call is
@@ -814,6 +840,7 @@ static act_entry_t *gact_vals = NULL;
 static int          gact_cap  = 0;
 static int          gact_cnt  = 0;
 static int          gact_ymax = 2000;
+static int          gact_compact_threshold = GACT_COMPACT_FLOOR;
 
 static void gact_init_table(void)
 {
@@ -834,6 +861,7 @@ static void gact_reset(void)
 {
     gact_free_all();
     gact_init_table();
+    gact_compact_threshold = GACT_COMPACT_FLOOR;
 }
 
 static void gact_resize(void)
@@ -927,8 +955,12 @@ void bugs_g_activity_update(void)
         e->activity++;
     }
 
-    if (gact_cnt > 200000)
+    if (gact_cnt > gact_compact_threshold) {
         gact_compact((uint64_t)gact_ymax / 10);
+        int next = gact_cnt + (gact_cnt >> 1);
+        gact_compact_threshold = (next < GACT_COMPACT_FLOOR)
+                               ? GACT_COMPACT_FLOOR : next;
+    }
 }
 
 void bugs_g_activity_render_col(int32_t *col, int height)
@@ -1024,6 +1056,331 @@ void bugs_gq_activity_deciles(float *deciles_out)
     for (int i = 0; i < gact_cap; i++) {
         if (gact_keys[i] == ACT_EMPTY || gact_vals[i].pop_count == 0) continue;
         buf[n++] = (float)gact_vals[i].activity * inv_D;
+    }
+    qsort(buf, (size_t)n, sizeof(float), _float_cmp);
+    for (int d = 0; d < 9; d++) {
+        int idx = (int)((float)(d + 1) * 0.1f * (float)n);
+        if (idx >= n) idx = n - 1;
+        deciles_out[d] = buf[idx];
+    }
+    free(buf);
+}
+
+/* ── Neutral shadow population (Channon-style) ─────────────────────────
+ *
+ * Calibration shadow: mirrors the real run's demography under random
+ * selection. Same population size 1:1 with real, same reproduction
+ * procedure (genome_mutate_copy at the same g_mutation_rate), but births
+ * pick a uniformly-random surviving shadow parent and deaths pick a
+ * uniformly-random shadow member. Initialised at enable-time by copying
+ * the current real genomes, so t0 distributions are identical.
+ *
+ * Shadow members carry only genome content + cached hash (no positions,
+ * food, egenome, age) — none of those enter the activity hash or the
+ * mirror, and the shadow does not simulate behaviour. Activity buckets
+ * use the same FNV-1a hash as G-activity so N-activity and G-activity
+ * share a magnitude space and are directly comparable. */
+
+static genome_t *neut_genomes = NULL;
+static uint32_t *neut_hashes  = NULL;
+static int       neut_cap     = 0;
+static int       neut_n       = 0;
+static int       neut_enabled = 0;
+
+static void neut_grow(int new_cap)
+{
+    if (new_cap <= neut_cap) return;
+    neut_genomes = realloc(neut_genomes, (size_t)new_cap * sizeof(genome_t));
+    neut_hashes  = realloc(neut_hashes,  (size_t)new_cap * sizeof(uint32_t));
+    neut_cap = new_cap;
+}
+
+static void neut_free_all(void)
+{
+    free(neut_genomes); neut_genomes = NULL;
+    free(neut_hashes);  neut_hashes  = NULL;
+    neut_cap = neut_n = 0;
+    neut_enabled = 0;
+}
+
+/* ── N-activity hash table (parallel to act_*, no flux history) ──────── */
+
+static uint32_t    *nact_keys = NULL;
+static act_entry_t *nact_vals = NULL;
+static int          nact_cap  = 0;
+static int          nact_cnt  = 0;
+static int          nact_ymax = 2000;
+static int          nact_compact_threshold = NACT_COMPACT_FLOOR;
+
+static void nact_init_table(void)
+{
+    nact_cap  = ACT_INIT_CAP;
+    nact_cnt  = 0;
+    nact_keys = calloc((size_t)nact_cap, sizeof(uint32_t));
+    nact_vals = calloc((size_t)nact_cap, sizeof(act_entry_t));
+}
+
+static void nact_free_all(void)
+{
+    free(nact_keys); nact_keys = NULL;
+    free(nact_vals); nact_vals = NULL;
+    nact_cap = nact_cnt = 0;
+}
+
+static void nact_reset(void)
+{
+    nact_free_all();
+    nact_init_table();
+    nact_compact_threshold = NACT_COMPACT_FLOOR;
+}
+
+static void nact_resize(void)
+{
+    int new_cap = nact_cap * 2;
+    uint32_t    *nk = calloc((size_t)new_cap, sizeof(uint32_t));
+    act_entry_t *nv = calloc((size_t)new_cap, sizeof(act_entry_t));
+    for (int i = 0; i < nact_cap; i++) {
+        if (nact_keys[i] == ACT_EMPTY) continue;
+        uint32_t slot = nact_keys[i] % (uint32_t)new_cap;
+        while (nk[slot] != ACT_EMPTY)
+            slot = (slot + 1) % (uint32_t)new_cap;
+        nk[slot] = nact_keys[i];
+        nv[slot] = nact_vals[i];
+    }
+    free(nact_keys); free(nact_vals);
+    nact_keys = nk; nact_vals = nv; nact_cap = new_cap;
+}
+
+static act_entry_t *nact_find_or_insert(uint32_t key, int32_t color)
+{
+    if (nact_cnt * 10 >= nact_cap * 7) nact_resize();
+    uint32_t slot = key % (uint32_t)nact_cap;
+    while (nact_keys[slot] != ACT_EMPTY) {
+        if (nact_keys[slot] == key) return &nact_vals[slot];
+        slot = (slot + 1) % (uint32_t)nact_cap;
+    }
+    nact_keys[slot] = key;
+    nact_vals[slot].activity  = 0;
+    nact_vals[slot].pop_count = 0;
+    nact_vals[slot].color     = color;
+    nact_cnt++;
+    return &nact_vals[slot];
+}
+
+static void nact_compact(uint64_t threshold)
+{
+    int keep = 0;
+    for (int i = 0; i < nact_cap; i++) {
+        if (nact_keys[i] == ACT_EMPTY) continue;
+        if (nact_vals[i].pop_count > 0 || nact_vals[i].activity >= threshold)
+            keep++;
+    }
+    int new_cap = ACT_INIT_CAP;
+    while (new_cap * 7 < keep * 10 + 10) new_cap *= 2;
+
+    uint32_t    *nk = calloc((size_t)new_cap, sizeof(uint32_t));
+    act_entry_t *nv = calloc((size_t)new_cap, sizeof(act_entry_t));
+    int new_cnt = 0;
+    for (int i = 0; i < nact_cap; i++) {
+        if (nact_keys[i] == ACT_EMPTY) continue;
+        if (nact_vals[i].pop_count == 0 && nact_vals[i].activity < threshold)
+            continue;
+        uint32_t slot = nact_keys[i] % (uint32_t)new_cap;
+        while (nk[slot] != ACT_EMPTY) slot = (slot + 1) % (uint32_t)new_cap;
+        nk[slot] = nact_keys[i];
+        nv[slot] = nact_vals[i];
+        new_cnt++;
+    }
+    free(nact_keys); free(nact_vals);
+    nact_keys = nk; nact_vals = nv;
+    nact_cap  = new_cap;
+    nact_cnt  = new_cnt;
+}
+
+/* Apply 'deaths' uniform-random kills then 'births' uniform-random
+ * reproductions to the shadow. Called once per bugs_step after real
+ * g_births_last / g_deaths_last have been tallied. */
+static void neutral_apply_demography(int births, int deaths)
+{
+    if (!neut_enabled) return;
+
+    if (deaths > neut_n) deaths = neut_n;
+    for (int d = 0; d < deaths; d++) {
+        int victim = rng_int(neut_n);
+        int last   = neut_n - 1;
+        if (victim != last) {
+            neut_genomes[victim] = neut_genomes[last];
+            neut_hashes [victim] = neut_hashes [last];
+        }
+        neut_n--;
+    }
+
+    if (births <= 0) return;
+    int target = neut_n + births;
+    if (target > neut_cap) {
+        int nc = neut_cap > 0 ? neut_cap : 64;
+        while (nc < target) nc *= 2;
+        neut_grow(nc);
+    }
+    for (int b = 0; b < births; b++) {
+        genome_t *child = &neut_genomes[neut_n];
+        if (neut_n > 0) {
+            int p = rng_int(neut_n);
+            genome_mutate_copy(&neut_genomes[p], child, g_mutation_rate);
+        } else {
+            /* Defensive: shadow emptied. Should not occur in lockstep
+             * with real, but seed with a fresh random genome rather than
+             * leaving an empty bucket. */
+            genome_random(child);
+        }
+        neut_hashes[neut_n] = genome_hash_fn(child);
+        neut_n++;
+    }
+}
+
+/* ── Public API: enable / disable / accessors ──────────────────────── */
+
+void bugs_neutral_enable(void)
+{
+    neut_free_all();
+    int n = n_alive;
+    int cap = n > 0 ? n : 64;
+    neut_grow(cap);
+    for (int i = 0; i < n; i++) {
+        bug_t *b = &bug_pool[alive_ids[i]];
+        neut_genomes[i] = b->genome;
+        neut_hashes [i] = b->genome_hash;
+    }
+    neut_n = n;
+    neut_enabled = 1;
+    nact_reset();
+}
+
+void bugs_neutral_disable(void)
+{
+    neut_free_all();
+    nact_reset();
+}
+
+int bugs_neutral_is_enabled(void)     { return neut_enabled; }
+int bugs_neutral_get_population(void) { return neut_enabled ? neut_n : 0; }
+
+void bugs_set_n_act_ymax(int y) { if (y > 0) nact_ymax = y; }
+int  bugs_get_n_act_ymax(void)  { return nact_ymax; }
+
+void bugs_n_activity_update(void)
+{
+    if (!nact_keys) return;
+    for (int i = 0; i < nact_cap; i++)
+        if (nact_keys[i] != ACT_EMPTY)
+            nact_vals[i].pop_count = 0;
+
+    for (int i = 0; i < neut_n; i++) {
+        uint32_t h = neut_hashes[i];
+        act_entry_t *e = nact_find_or_insert(h, hash_to_color(h));
+        e->pop_count++;
+        e->activity++;
+    }
+
+    if (nact_cnt > nact_compact_threshold) {
+        nact_compact((uint64_t)nact_ymax / 10);
+        int next = nact_cnt + (nact_cnt >> 1);
+        nact_compact_threshold = (next < NACT_COMPACT_FLOOR)
+                               ? NACT_COMPACT_FLOOR : next;
+    }
+}
+
+void bugs_n_activity_render_col(int32_t *col, int height)
+{
+    for (int y = 0; y < height; y++)
+        col[y] = (int32_t)0xFF111111u;
+
+    if (!nact_keys || nact_cnt == 0) return;
+
+    uint64_t ymax = (uint64_t)nact_ymax;
+    uint32_t ypop[height];
+    uint64_t yact[height];
+    uint32_t ykey[height];
+    uint32_t ycol[height];
+    for (int y = 0; y < height; y++) {
+        ypop[y] = 0; yact[y] = 0; ykey[y] = 0; ycol[y] = 0;
+    }
+
+    for (int i = 0; i < nact_cap; i++) {
+        uint32_t key = nact_keys[i];
+        if (key == ACT_EMPTY) continue;
+        uint32_t pop = nact_vals[i].pop_count;
+        uint64_t act = nact_vals[i].activity;
+        int y = (height - 1) - (int)((uint64_t)(height - 1) * act / (act + ymax));
+        if (y < 0) y = 0;
+        if (y >= height) y = height - 1;
+        int better =
+            pop >  ypop[y] ||
+            (pop == ypop[y] && act >  yact[y]) ||
+            (pop == ypop[y] && act == yact[y] && key > ykey[y]);
+        if (better) {
+            ypop[y] = pop;
+            yact[y] = act;
+            ykey[y] = key;
+            ycol[y] = (uint32_t)nact_vals[i].color;
+        }
+    }
+
+    for (int y = 0; y < height; y++) {
+        if (ykey[y] == 0) continue;
+        uint32_t c = ycol[y];
+        if (ypop[y] == 0) {
+            uint8_t r = (uint8_t)(((c >> 16) & 0xFF) * 15 / 100);
+            uint8_t g = (uint8_t)(((c >>  8) & 0xFF) * 15 / 100);
+            uint8_t b = (uint8_t)(( c        & 0xFF) * 15 / 100);
+            col[y] = (int32_t)(0xFF000000u | ((uint32_t)r << 16)
+                              | ((uint32_t)g << 8) | b);
+        } else {
+            col[y] = (int32_t)c;
+        }
+    }
+}
+
+int bugs_n_activity_get(uint32_t *keys, uint64_t *activities,
+                        uint32_t *pop_counts, int32_t *colors, int max_n)
+{
+    int n = 0;
+    if (!nact_keys) return 0;
+    for (int i = 0; i < nact_cap && n < max_n; i++) {
+        if (nact_keys[i] == ACT_EMPTY) continue;
+        keys[n]       = nact_keys[i];
+        activities[n] = nact_vals[i].activity;
+        pop_counts[n] = nact_vals[i].pop_count;
+        colors[n]     = nact_vals[i].color;
+        n++;
+    }
+    return n;
+}
+
+void bugs_nq_activity_deciles(float *deciles_out)
+{
+    if (!nact_keys || nact_cnt == 0) {
+        for (int i = 0; i < 9; i++) deciles_out[i] = 0.0f;
+        return;
+    }
+    int D = 0;
+    for (int i = 0; i < nact_cap; i++)
+        if (nact_keys[i] != ACT_EMPTY && nact_vals[i].pop_count > 0)
+            D++;
+    if (D == 0) {
+        for (int i = 0; i < 9; i++) deciles_out[i] = 0.0f;
+        return;
+    }
+    float *buf = (float *)malloc((size_t)D * sizeof(float));
+    if (!buf) {
+        for (int i = 0; i < 9; i++) deciles_out[i] = 0.0f;
+        return;
+    }
+    int n = 0;
+    float inv_D = 1.0f / (float)D;
+    for (int i = 0; i < nact_cap; i++) {
+        if (nact_keys[i] == ACT_EMPTY || nact_vals[i].pop_count == 0) continue;
+        buf[n++] = (float)nact_vals[i].activity * inv_D;
     }
     qsort(buf, (size_t)n, sizeof(float), _float_cmp);
     for (int d = 0; d < 9; d++) {
@@ -1159,6 +1516,9 @@ void bugs_step(void)
     /* clear born-this-step flags */
     for (int i = 0; i < n_alive; i++)
         bug_pool[alive_ids[i]].born_this_step = 0;
+
+    /* Mirror real demography into the neutral shadow (no-op if disabled). */
+    neutral_apply_demography(g_births_last, g_deaths_last);
 
     g_step++;
 }

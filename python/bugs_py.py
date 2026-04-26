@@ -283,6 +283,36 @@ class Bugs:
         L.bugs_gq_activity_deciles.argtypes  = [ctypes.POINTER(ctypes.c_float)]
         L.bugs_gq_activity_deciles.restype   = None
 
+        # Neutral shadow population (Channon-style activity calibration)
+        L.bugs_neutral_enable.argtypes       = []
+        L.bugs_neutral_enable.restype        = None
+        L.bugs_neutral_disable.argtypes      = []
+        L.bugs_neutral_disable.restype       = None
+        L.bugs_neutral_is_enabled.argtypes   = []
+        L.bugs_neutral_is_enabled.restype    = ctypes.c_int
+        L.bugs_neutral_get_population.argtypes = []
+        L.bugs_neutral_get_population.restype  = ctypes.c_int
+
+        # N-activity probe (shadow population, same hash as G-activity)
+        L.bugs_n_activity_update.argtypes    = []
+        L.bugs_n_activity_update.restype     = None
+        L.bugs_n_activity_render_col.argtypes = [ctypes.POINTER(ctypes.c_int32),
+                                                 ctypes.c_int]
+        L.bugs_n_activity_render_col.restype = None
+        L.bugs_n_activity_get.argtypes       = [
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_int32),
+            ctypes.c_int]
+        L.bugs_n_activity_get.restype        = ctypes.c_int
+        L.bugs_set_n_act_ymax.argtypes       = [ctypes.c_int]
+        L.bugs_set_n_act_ymax.restype        = None
+        L.bugs_get_n_act_ymax.argtypes       = []
+        L.bugs_get_n_act_ymax.restype        = ctypes.c_int
+        L.bugs_nq_activity_deciles.argtypes  = [ctypes.POINTER(ctypes.c_float)]
+        L.bugs_nq_activity_deciles.restype   = None
+
         # bug-coloring: per-LUT-index 31x31 move histogram
         L.bugs_bug_coloring_hist.argtypes    = [ctypes.c_int,
                                                 ctypes.POINTER(ctypes.c_int32)]
@@ -693,6 +723,53 @@ class Bugs:
         """Return 9-element float array with g-activity deciles p10..p90."""
         out = np.zeros(9, dtype=np.float32)
         self._lib.bugs_gq_activity_deciles(
+            out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
+        return out
+
+    # ── N-activity probe (Channon-style neutral shadow) ───────────────
+
+    def neutral_enable(self):
+        """Enable the neutral shadow population, sized 1:1 with the
+        current real population and seeded by copying current real
+        genomes. Each subsequent step() mirrors real births/deaths into
+        the shadow with random selection (uniform parent / uniform kill,
+        same mutation_rate). N-activity counters are reset."""
+        self._lib.bugs_neutral_enable()
+
+    def neutral_disable(self):
+        """Disable the neutral shadow and free its state."""
+        self._lib.bugs_neutral_disable()
+
+    def neutral_is_enabled(self):
+        return bool(self._lib.bugs_neutral_is_enabled())
+
+    def neutral_population(self):
+        """Live shadow population (matches real population while enabled)."""
+        return int(self._lib.bugs_neutral_get_population())
+
+    def N_activity_update(self):
+        self._lib.bugs_n_activity_update()
+
+    def get_N_activity(self, max_n=4096):
+        """Return N-activity table (shadow). Same key/value layout as
+        get_G_activity — both use the same FNV-1a genome-content hash."""
+        keys = np.zeros(max_n, dtype=np.uint32)
+        acts = np.zeros(max_n, dtype=np.uint64)
+        pops = np.zeros(max_n, dtype=np.uint32)
+        cols = np.zeros(max_n, dtype=np.int32)
+        n = self._lib.bugs_n_activity_get(
+            keys.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+            acts.ctypes.data_as(ctypes.POINTER(ctypes.c_uint64)),
+            pops.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+            cols.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+            max_n)
+        return {'hash': keys[:n], 'activity': acts[:n],
+                'pop_count': pops[:n], 'color': cols[:n]}
+
+    def Nq_activity_deciles(self):
+        """Return 9-element float array with N-activity deciles p10..p90."""
+        out = np.zeros(9, dtype=np.float32)
+        self._lib.bugs_nq_activity_deciles(
             out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
         return out
 

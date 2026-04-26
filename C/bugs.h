@@ -185,6 +185,34 @@ int  bugs_get_g_act_ymax(void);
 
 void bugs_gq_activity_deciles(float *deciles_out);
 
+/* ── Neutral shadow population (Channon-style activity calibration) ────
+ *
+ * Shadow population mirroring the real run's demography under random
+ * selection. Same population size 1:1 with real, same reproduction
+ * procedure (genome_mutate_copy at the same mutation_rate), but births
+ * pick a uniform-random surviving shadow parent and deaths pick a
+ * uniform-random shadow member. Initialised by copying the current real
+ * genomes at enable time; mirrored each bugs_step thereafter.
+ *
+ * N-activity is bucketised by the same FNV-1a genome-content hash as
+ * G-activity, so the two distributions live in the same magnitude space
+ * and can be directly compared. */
+
+void bugs_neutral_enable(void);
+void bugs_neutral_disable(void);
+int  bugs_neutral_is_enabled(void);
+int  bugs_neutral_get_population(void);
+
+void bugs_n_activity_update(void);
+void bugs_n_activity_render_col(int32_t *col, int height);
+int  bugs_n_activity_get(uint32_t *keys, uint64_t *activities,
+                         uint32_t *pop_counts, int32_t *colors, int max_n);
+void bugs_set_n_act_ymax(int y);
+int  bugs_get_n_act_ymax(void);
+
+/* Nq-activity: 9 deciles of N-activity (p10..p90). */
+void bugs_nq_activity_deciles(float *deciles_out);
+
 /* ── Bug-coloring probe (per-LUT-index move distribution) ──────────── */
 
 /* For a chosen 9-bit LUT index (0..N_GENES-1), compute a 31×31 histogram

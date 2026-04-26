@@ -7,6 +7,7 @@ All output goes to the terminal where Jupyter was started.
 Usage (internal):
     python sdl_worker.py <pixel_shm> <ctrl_shm> <N> <px> \\
                          [--G-activity=<shm>]  [--Gq-activity=<shm>] \\
+                         [--N-activity=<shm>]  [--Nq-activity=<shm>] \\
                          [--g-activity=<shm>]  [--gq-activity=<shm>] \\
                          [--ts=<shm>] [--coloring=<shm>]
 
@@ -500,6 +501,8 @@ def main():
 
     G_activity_shm_name  = None
     Gq_activity_shm_name = None
+    N_activity_shm_name  = None
+    Nq_activity_shm_name = None
     g_activity_shm_name  = None
     gq_activity_shm_name = None
     egenome_shm_name     = None
@@ -510,6 +513,10 @@ def main():
             G_activity_shm_name = arg[len("--G-activity="):]
         elif arg.startswith("--Gq-activity="):
             Gq_activity_shm_name = arg[len("--Gq-activity="):]
+        elif arg.startswith("--N-activity="):
+            N_activity_shm_name = arg[len("--N-activity="):]
+        elif arg.startswith("--Nq-activity="):
+            Nq_activity_shm_name = arg[len("--Nq-activity="):]
         elif arg.startswith("--g-activity="):
             g_activity_shm_name = arg[len("--g-activity="):]
         elif arg.startswith("--gq-activity="):
@@ -526,6 +533,8 @@ def main():
     print(f"Bugs SDL: starting  N={N} px={px}  "
           f"G-activity={bool(G_activity_shm_name)}  "
           f"Gq-activity={bool(Gq_activity_shm_name)}  "
+          f"N-activity={bool(N_activity_shm_name)}  "
+          f"Nq-activity={bool(Nq_activity_shm_name)}  "
           f"g-activity={bool(g_activity_shm_name)}  "
           f"gq-activity={bool(gq_activity_shm_name)}  "
           f"egenome={bool(egenome_shm_name)}  "
@@ -598,7 +607,7 @@ def main():
             _open_activity_shm(g_activity_shm_name, "g-activity")
         if g_activity_shm is None: g_activity_shm_name = None
 
-    # ── Gq/gq-activity shared memory ─────────────────────────────
+    # ── Gq/Nq/gq-activity shared memory ─────────────────────────
     QA_N_DECILES         = 9
     Gq_activity_shm      = None
     Gq_activity_cursor   = None
@@ -607,6 +616,23 @@ def main():
         Gq_activity_shm, Gq_activity_cursor, Gq_activity_deciles = \
             _open_deciles_shm(Gq_activity_shm_name, "Gq-activity", QA_N_DECILES)
         if Gq_activity_shm is None: Gq_activity_shm_name = None
+
+    # ── N-activity shared memory ─────────────────────────────────
+    N_activity_shm    = None
+    N_activity_cursor = None
+    N_activity_pixels = None
+    if N_activity_shm_name:
+        N_activity_shm, N_activity_cursor, N_activity_pixels = \
+            _open_activity_shm(N_activity_shm_name, "N-activity")
+        if N_activity_shm is None: N_activity_shm_name = None
+
+    Nq_activity_shm      = None
+    Nq_activity_cursor   = None
+    Nq_activity_deciles  = None
+    if Nq_activity_shm_name:
+        Nq_activity_shm, Nq_activity_cursor, Nq_activity_deciles = \
+            _open_deciles_shm(Nq_activity_shm_name, "Nq-activity", QA_N_DECILES)
+        if Nq_activity_shm is None: Nq_activity_shm_name = None
 
     gq_activity_shm      = None
     gq_activity_cursor   = None
@@ -766,7 +792,7 @@ def main():
         print(f"Bugs SDL: {label} window created", flush=True)
         return win, sps, dst_arr, new_next_y
 
-    # Stacking order (top → bottom): G, Gq, g, gq.
+    # Stacking order (top → bottom): G, Gq, N, Nq, g, gq.
     # ── G-activity window ────────────────────────────────────────
     G_win_p = G_surf_p = G_dst = None
     if G_activity_shm is not None:
@@ -779,6 +805,19 @@ def main():
     if Gq_activity_shm is not None:
         Gq_win_p, Gq_surf_p, Gq_dst, next_probe_y = _create_probe_window(
             b"Gq-activity", PROBE_W, PROBE_H, "Gq-activity")
+
+    # ── N-activity window (Channon shadow) ───────────────────────
+    N_win_p = N_surf_p = N_dst = None
+    if N_activity_shm is not None:
+        N_win_p, N_surf_p, N_dst, next_probe_y = _create_probe_window(
+            b"N-activity (shadow)", PROBE_W, ACT_H, "N-activity")
+
+    # ── Nq-activity window (deciles) ─────────────────────────────
+    Nq_win_p = Nq_surf_p = Nq_dst = None
+    Nq_global_max = 0.0
+    if Nq_activity_shm is not None:
+        Nq_win_p, Nq_surf_p, Nq_dst, next_probe_y = _create_probe_window(
+            b"Nq-activity (shadow)", PROBE_W, PROBE_H, "Nq-activity")
 
     # ── g-activity window ────────────────────────────────────────
     g_win_p = g_surf_p = g_dst = None
@@ -870,6 +909,23 @@ def main():
             sdl2.SDL_UnlockSurface(Gq_surf_p)
             sdl2.SDL_UpdateWindowSurface(Gq_win_p)
 
+        # N-activity window
+        if N_win_p is not None and N_activity_pixels is not None:
+            sdl2.SDL_LockSurface(N_surf_p)
+            cur = int(N_activity_cursor[0])
+            N_dst[:ACT_H, :PROBE_W] = np.roll(N_activity_pixels, -cur, axis=1)
+            sdl2.SDL_UnlockSurface(N_surf_p)
+            sdl2.SDL_UpdateWindowSurface(N_win_p)
+
+        # Nq-activity window (deciles)
+        if Nq_win_p is not None and Nq_activity_deciles is not None:
+            sdl2.SDL_LockSurface(Nq_surf_p)
+            cur = int(Nq_activity_cursor[0])
+            Nq_global_max = _render_q_activity(Nq_dst, Nq_activity_deciles,
+                                                cur, Nq_global_max)
+            sdl2.SDL_UnlockSurface(Nq_surf_p)
+            sdl2.SDL_UpdateWindowSurface(Nq_win_p)
+
         # gq-activity window (deciles)
         if gq_win_p is not None and gq_activity_deciles is not None:
             sdl2.SDL_LockSurface(gq_surf_p)
@@ -925,6 +981,10 @@ def main():
         sdl2.SDL_DestroyWindow(eg_win_p)
     if gq_win_p is not None:
         sdl2.SDL_DestroyWindow(gq_win_p)
+    if Nq_win_p is not None:
+        sdl2.SDL_DestroyWindow(Nq_win_p)
+    if N_win_p is not None:
+        sdl2.SDL_DestroyWindow(N_win_p)
     if Gq_win_p is not None:
         sdl2.SDL_DestroyWindow(Gq_win_p)
     if g_win_p is not None:
@@ -941,6 +1001,10 @@ def main():
         g_activity_shm.close()
     if Gq_activity_shm is not None:
         Gq_activity_shm.close()
+    if N_activity_shm is not None:
+        N_activity_shm.close()
+    if Nq_activity_shm is not None:
+        Nq_activity_shm.close()
     if gq_activity_shm is not None:
         gq_activity_shm.close()
     if egenome_shm is not None:

@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# C build artifacts
+*.o
+*.a
+*.so
+*.dylib
+build/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+Untitled*.ipynb
+jupyter.out
+
+# Run outputs / scratch
+Runs/
+
+# Claude Code per-machine settings
+.claude/settings.local.json
